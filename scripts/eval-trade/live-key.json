@@ -1,0 +1,27 @@
+{
+ "L1-gold-analysis": {
+  "A": "thinkingmachines/inkling",
+  "B": "qwen/qwen3.8-flash",
+  "C": "nvidia/nemotron-3.5-lightning"
+ },
+ "L2-eurusd-plan": {
+  "A": "nvidia/nemotron-3.5-lightning",
+  "B": "qwen/qwen3.8-flash",
+  "C": "thinkingmachines/inkling"
+ },
+ "L3-btc-scalp": {
+  "A": "qwen/qwen3.8-flash",
+  "B": "thinkingmachines/inkling",
+  "C": "nvidia/nemotron-3.5-lightning"
+ },
+ "L4-usdjpy-review": {
+  "A": "nvidia/nemotron-3.5-lightning",
+  "B": "qwen/qwen3.8-flash",
+  "C": "thinkingmachines/inkling"
+ },
+ "L5-gold-revenge": {
+  "A": "nvidia/nemotron-3.5-lightning",
+  "B": "qwen/qwen3.8-flash",
+  "C": "thinkingmachines/inkling"
+ }
+}
