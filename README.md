@@ -49,7 +49,7 @@ How the model stays hidden:
 3. An output filter (`src/lib/ai/sanitize.ts`) removes model/vendor names from the stream, even when a name is split across chunks.
 4. Provider errors are logged on the server and replaced with generic messages.
 
-How the AI learns from the market (ideas from FinGPT and FinRL, adapted for hosted models that can't be fine-tuned):
+How the AI learns from the market (adapted for hosted models that can't be fine-tuned):
 - **Track record** (`src/lib/ai/track.ts`): every Pro/Ultra trade plan drawn on the chart is stored and later scored against real candles
   (TP first, SL first, or 60 bars then marked at market). The instrument's record, split by side, timeframe, regime and trend alignment,
   goes back into the AI's context, so it tightens up on setups that have been losing. Free doesn't see it, since Free gets no trade plans.
