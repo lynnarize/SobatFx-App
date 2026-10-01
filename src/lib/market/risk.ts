@@ -65,8 +65,7 @@ export function positionSize(
   if (lot < 0.01) warnings.push("tooWide");
   if (s.riskPct > 2) warnings.push("aggressive");
   const rr = tpPips != null ? tpPips / slPips : null;
-  // Only a clearly lopsided plan is flagged: structure-based targets often sit near 1:1.
-  if (rr != null && rr < 0.5) warnings.push("rrBelow1");
+  if (rr != null && rr < 1) warnings.push("rrBelow1");
   const wrongSide = tp != null && (tp - entry) * (entry - sl) <= 0;
   if (wrongSide) warnings.push("sameSide");
   return {

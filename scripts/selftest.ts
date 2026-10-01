@@ -1,5 +1,7 @@
 /** Offline checks for the pure logic (no API keys needed):  npm test */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { contextBlock, systemPrompt } from "../src/lib/ai/prompt";
 import { scrub, streamScrubber } from "../src/lib/ai/sanitize";
 import { formatMtf, higherTimeframes, summarizeTf } from "../src/lib/ai/mtf";
@@ -35,9 +37,22 @@ test("XAU/USD lot: $1000, 1%, $5 SL → 0.02", () => assert.equal(positionSize(i
 test("XAU/USD pip value = $10/lot", () => assert.equal(pipValueUsd(inst("XAUUSD"), 4200), 10));
 test("USD/JPY pip value @150 ≈ $6.67", () => assert.equal(pipValueUsd(inst("USDJPY"), 150).toFixed(2), "6.67"));
 test("GBP/JPY uses USDJPY rate", () => assert.equal(pipValueUsd(inst("GBPJPY"), 200, { USDJPY: 150 }).toFixed(2), "6.67"));
+test("AI trade plans under 1:1 R:R are refused, not drawn", () => {
+  const block = (p: string) => "Plan.\n```sobatfx-draw\n" + JSON.stringify({ drawings: [{ type: "hline", price: 84490 }, JSON.parse(p)] }) + "\n```";
+  const bad = extractDrawings(block('{"type":"position","side":"short","entry":84155,"sl":85100,"tp":83968,"t1":1}'));
+  assert.equal(bad.drawings.filter((d) => d.type === "position").length, 0);
+  assert.equal(bad.rejected.length, 1);
+  assert.equal(bad.rejected[0].rr.toFixed(2), "0.20");
+  assert.equal(bad.unreadable, false);
+  const wrongSide = extractDrawings(block('{"type":"position","side":"long","entry":100,"sl":105,"tp":120,"t1":1}'));
+  assert.equal(wrongSide.rejected.length, 1);
+  const ok = extractDrawings(block('{"type":"position","side":"short","entry":84150,"sl":84500,"tp":83600,"t1":1}'));
+  assert.equal(ok.drawings.filter((d) => d.type === "position").length, 1);
+  assert.equal(ok.rejected.length, 0);
+});
 test("R:R and warnings", () => {
-  const r = positionSize(inst("EURUSD"), usd, 1.1, 1.098, 1.1005)!;
-  assert.ok(r.rr! < 0.5 && r.warnings.includes("rrBelow1"));
+  const r = positionSize(inst("EURUSD"), usd, 1.1, 1.098, 1.099)!;
+  assert.ok(r.rr! < 1 && r.warnings.includes("rrBelow1"));
 });
 test("IDR account converts pip value", () => {
   const r = positionSize(inst("EURUSD"), { balance: 16_500_000, riskPct: 1, currency: "IDR", usdIdr: 16500 }, 1.1, 1.098, null)!;
@@ -78,6 +93,17 @@ test("calculator check flags a wrong AI lot and a too-wide stop", () => {
   assert.equal(wide.tooWide, true);
   assert.equal(wide.riskMoney.toFixed(2), "13.00");
 });
+test("BotID protects every route that runs the strict guard (otherwise Vercel blocks every real user)", () => {
+  const protectedPaths = new Set([...fs.readFileSync("src/instrumentation-client.ts", "utf8").matchAll(/path: "([^"]+)"/g)].map((m) => m[1]));
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+  const strict = walk("src/app/api").filter((f) => f.endsWith("route.ts") && /strict: true/.test(fs.readFileSync(f, "utf8")));
+  assert.ok(strict.length > 0);
+  for (const f of strict) {
+    const route = "/" + path.dirname(path.relative("src/app", f)).split(path.sep).join("/");
+    assert.ok(protectedPaths.has(route), `${route} uses guard({ strict: true }) but is missing from src/instrumentation-client.ts`);
+  }
+});
+
 test("/grant parsing: email, plan, optional days", () => {
   assert.deepEqual(parseGrant("/grant Budi@Gmail.com pro"), { email: "budi@gmail.com", tier: "pro" });
   assert.deepEqual(parseGrant("/grant@sobatfx_bot a@b.co ultra 45"), { email: "a@b.co", tier: "ultimate", days: 45 });

@@ -232,7 +232,7 @@ const en = {
   "sel.extendRight": "Extend right",
   "warn.tooWide": "Stop loss too wide for this balance — even 0.01 lot risks more than your budget.",
   "warn.aggressive": "Risking more than 2% per trade is aggressive.",
-  "warn.rrBelow1": "Reward is less than half the risk (R:R below 1:0.5).",
+  "warn.rrBelow1": "Reward is smaller than risk (R:R below 1:1).",
   "warn.sameSide": "TP and SL are on the same side of entry.",
 
   // AI panel
@@ -248,6 +248,7 @@ const en = {
   "ai.upgradeQris": "Upgrade",
   "ai.drawing": "Drawing on chart…",
   "ai.drew": "{n} drawing(s) added to the chart",
+  "ai.rrRejected": "Trade plan not drawn: {side} {entry} has R:R 1:{rr}, below the 1:{min} minimum. The reward is too small for the risk; wait for a better entry or ask for a new plan.",
   "ai.remove": "remove",
   "ai.drawFailed": "The AI's chart drawing couldn't be read. Ask \"draw it again\" to retry.",
   "ai.calcTitle": "Calculator check",
@@ -811,7 +812,7 @@ const id: Record<Key, string> = {
   "sel.extendRight": "Perpanjang ke kanan",
   "warn.tooWide": "Stop loss terlalu lebar untuk saldo ini — bahkan 0,01 lot sudah melebihi batas risiko Anda.",
   "warn.aggressive": "Risiko lebih dari 2% per trade tergolong agresif.",
-  "warn.rrBelow1": "Potensi profit kurang dari setengah risiko (R:R di bawah 1:0,5).",
+  "warn.rrBelow1": "Potensi profit lebih kecil dari risiko (R:R di bawah 1:1).",
   "warn.sameSide": "TP dan SL berada di sisi yang sama dari entry.",
 
   "ai.signInToStart": "Masuk untuk mulai",
@@ -826,6 +827,7 @@ const id: Record<Key, string> = {
   "ai.upgradeQris": "Upgrade",
   "ai.drawing": "Menggambar di chart…",
   "ai.drew": "{n} gambar ditambahkan ke chart",
+  "ai.rrRejected": "Rencana trade tidak digambar: {side} {entry} punya R:R 1:{rr}, di bawah minimum 1:{min}. Potensi profit terlalu kecil dibanding risikonya; tunggu entry yang lebih baik atau minta rencana baru.",
   "ai.remove": "hapus",
   "ai.drawFailed": "Gambar chart dari AI tidak bisa dibaca. Ketik \"gambar ulang\" untuk mencoba lagi.",
   "ai.calcTitle": "Cek kalkulator",

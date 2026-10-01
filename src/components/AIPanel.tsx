@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extractAnnotations, prepareUpload } from "@/lib/annotate";
 import { journalForAI } from "@/lib/paper";
-import { describeDrawings, extractDrawings } from "@/lib/drawings";
+import { MIN_RR, type RejectedPlan, describeDrawings, extractDrawings } from "@/lib/drawings";
 import { AnnotatedImage } from "./AnnotatedImage";
 import { checkPlans, type PlanCheck } from "@/lib/ai/lot-check";
 import { adx, atr, bollinger, ema, macd, rsi, swings, turbulence } from "@/lib/market/indicators";
@@ -28,6 +28,8 @@ interface Msg {
   /** The AI sent a drawing block the app couldn't use. */
   drawFailed?: boolean;
   drew?: number;
+  /** Trade plans the AI sent that were not drawn because their R:R was below the minimum. */
+  rejected?: RejectedPlan[];
   /** The app's own lot sizing for each trade plan the AI drew (the AI's arithmetic can be wrong). */
   sizing?: { checks: PlanCheck[]; currency: "USD" | "IDR"; riskPct: number; digits: number };
   error?: "limit" | "auth" | "other";
@@ -211,7 +213,7 @@ export function AIPanel() {
         const sizeInst = getInstrument(symbol);
         const checks = sizeInst ? checkPlans(parsed.text, aiDraw, sizeInst, risk, rates) : [];
         const sizing = checks.length ? { checks, currency: risk.currency, riskPct: risk.riskPct, digits: sizeInst!.digits } : undefined;
-        update((m) => ({ ...m, content: full, drew: onChart ? aiDraw.length : 0, drawFailed: onChart && !upload && parsed.unreadable, sizing }));
+        update((m) => ({ ...m, content: full, drew: onChart ? aiDraw.length : 0, drawFailed: onChart && !upload && parsed.unreadable, rejected: onChart && !upload && me?.tier !== "free" ? parsed.rejected : undefined, sizing }));
       } catch (e) {
         if ((e as Error).name === "AbortError") update((m) => ({ ...m, content: m.content + `\n\n_${t("ai.stopped")}_` }));
         else update(() => ({ role: "assistant", content: t("ai.connection"), error: "other" }));
@@ -363,6 +365,12 @@ export function AIPanel() {
                       })}
                     </div>
                   )}
+                  {m.rejected?.map((p, j) => (
+                    <p key={j} className="mt-2 flex items-start gap-1.5 rounded-lg border border-down/40 bg-panel-2 px-2.5 py-1.5 text-xs text-down">
+                      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                      {t("ai.rrRejected", { side: t(p.side === "short" ? "pos.short" : "pos.long"), entry: p.entry, rr: p.rr.toFixed(2), min: MIN_RR })}
+                    </p>
+                  ))}
                   {m.drawFailed && (
                     <p className="mt-2 rounded-lg border border-line-2 bg-panel-2 px-2.5 py-1.5 text-xs text-muted">
                       <PenLine size={12} className="mr-1 inline" /> {t("ai.drawFailed")}

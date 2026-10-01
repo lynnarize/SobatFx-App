@@ -19,6 +19,18 @@ const str = (v: unknown, max = 24) => (typeof v === "string" && v.trim() ? v.sli
 // Tolerates spacing/underscore variants of the fence name.
 const BLOCK = /```\s*sobatfx[-_ ]draw\s*([\s\S]*?)(```|$)/i;
 
+/** Smallest reward:risk a trade plan from the AI may have. Below this the plan is not drawn. */
+export const MIN_RR = 1;
+
+/** A trade plan the AI sent that was refused (wrong side or too little reward for the risk). */
+export interface RejectedPlan {
+  side: "long" | "short";
+  entry: number;
+  sl: number;
+  tp: number;
+  rr: number;
+}
+
 export interface Range {
   tMin: number;
   tMax: number;
@@ -77,14 +89,15 @@ function findBlock(text: string): Found | null {
 /** Splits an AI reply into display text and validated drawings. Works on partial (streaming) text too. */
 export function extractDrawings(text: string, range?: Range) {
   const found = findBlock(text);
-  if (!found) return { text, drawings: [] as Drawing[], pending: false, unreadable: false };
+  const rejected: RejectedPlan[] = [];
+  if (!found) return { text, drawings: [] as Drawing[], pending: false, unreadable: false, rejected };
   const before = text.slice(0, found.start).trimEnd();
-  if (!found.closed) return { text: before, drawings: [], pending: true, unreadable: false };
+  if (!found.closed) return { text: before, drawings: [], pending: true, unreadable: false, rejected };
   // Text after the block stays visible: models often put the closing disclaimer line there.
   const after = text.slice(found.end).trim();
   const clean = after ? `${before}\n\n${after}` : before;
   const raw = parseLooseJson(found.body);
-  if (raw === undefined) return { text: clean, drawings: [], pending: false, unreadable: true };
+  if (raw === undefined) return { text: clean, drawings: [], pending: false, unreadable: true, rejected };
   const list = Array.isArray(raw) ? raw : ((raw as { drawings?: unknown[] })?.drawings ?? []);
   const out: Drawing[] = [];
   const span = range ? range.pMax - range.pMin : 0;
@@ -118,6 +131,13 @@ export function extractDrawings(text: string, range?: Range) {
         const t = t1 ?? range?.tMax;
         if (okP(entry) && okP(sl) && okP(tp) && t != null) {
           const side = d.side === "short" ? "short" : "long";
+          // Never draw a plan that risks more than it can make, or has SL/TP on the wrong side.
+          const rr = entry === sl ? 0 : (side === "long" ? tp - entry : entry - tp) / Math.abs(entry - sl);
+          const sidesOk = side === "long" ? sl < entry : sl > entry;
+          if (!sidesOk || rr < MIN_RR) {
+            rejected.push({ side, entry, sl, tp, rr: Math.max(rr, 0) });
+            break;
+          }
           out.push({ ...base(), lineStyle: undefined, color: side === "long" ? DEMAND : SUPPLY, type: "position", side, price: entry, stopPrice: sl, targetPrice: tp, time: t, time2: t + barSec * 25 });
         }
         break;
@@ -128,7 +148,7 @@ export function extractDrawings(text: string, range?: Range) {
     }
   }
   // A block that yields nothing valid (bad JSON shape, prices off the chart…) is reported, not silently dropped.
-  return { text: clean, drawings: out.slice(0, 8), pending: false, unreadable: out.length === 0 && list.length > 0 };
+  return { text: clean, drawings: out.slice(0, 8), pending: false, unreadable: out.length === 0 && list.length > 0 && rejected.length === 0, rejected };
 }
 
 /** Drawings described to the AI in its own vocabulary. */
