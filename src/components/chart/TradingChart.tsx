@@ -36,7 +36,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Drawing } from "@/lib/drawings";
 import { ema } from "@/lib/market/indicators";
-import { type FeedStatus, feedStatus, subscribeCandles, subscribePrice, subscribeStatus, venueOf } from "@/lib/market/live";
+import { type FeedStatus, feedStatus, setVenue, subscribeCandles, subscribePrice, subscribeStatus, subscribeVenue, venueOf } from "@/lib/market/live";
 import { fmtMoney, positionSize } from "@/lib/market/risk";
 import { type Candle, getInstrument, intervalSec } from "@/lib/market/symbols";
 import { kindKey } from "@/lib/paper";
@@ -82,7 +82,12 @@ export function TradingChart() {
   const { symbol, interval, candles, setCandles, setSource, drawings, setDrawings, risk, rates, registerChart, paper, prices, modifyPaperTrade } = ws;
   const inst = getInstrument(symbol)!;
   const barSec = intervalSec(interval);
-  const venue = venueOf(inst);
+  // Follows the venue /api/candles served (setVenue below), e.g. OKX when the server can't reach Binance.
+  const venue = useSyncExternalStore(
+    useCallback((cb: () => void) => subscribeVenue(inst, cb), [inst]),
+    () => venueOf(inst),
+    () => venueOf(inst),
+  );
   const { t, locale } = useT();
 
   const box = useRef<HTMLDivElement>(null);
@@ -315,6 +320,8 @@ export function TradingChart() {
         recalcEma();
         dirty.current = true;
         setSource({ name: j.source, note: j.note });
+        // History came from another venue than we stream → switch (re-runs this effect once).
+        setVenue(inst, j.feed);
       } catch (e) {
         if (!stop) setError((e as Error).message || "");
       }

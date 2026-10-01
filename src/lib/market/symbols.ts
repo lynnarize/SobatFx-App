@@ -2,7 +2,9 @@
 
 export type Kind = "forex" | "metal" | "crypto";
 /** Data-source caveat shown under the chart; translated via `note.*` in src/lib/i18n.ts. */
-export type SourceNote = "xaut" | "cross" | "backup" | "delayed" | "gcf";
+export type SourceNote = "perp" | "xaut" | "cross" | "backup" | "delayed" | "gcf";
+/** Public WebSocket venues in live.ts. */
+export type LiveVenue = "binance" | "binanceFutures" | "okx" | "hyperliquid" | "kraken";
 export type Interval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
 
 export const INTERVALS: { id: Interval; label: string; sec: number }[] = [
@@ -36,14 +38,24 @@ export interface Instrument {
     krakenCross?: [string, string];
     yahoo?: string;
     binance?: string;
+    /** Binance USDⓈ-M perpetual (fapi), e.g. the XAUUSDT gold perp. */
+    binanceFutures?: string;
+    /** OKX swap instId, e.g. XAU-USDT-SWAP. */
+    okx?: string;
+    /** Hyperliquid coin, e.g. the HIP-3 market xyz:GOLD. */
+    hyperliquid?: string;
   };
-  /** Live WebSocket feed (see live.ts). Matches the candle source so history and ticks agree. */
-  live?: { binance?: string; kraken?: string; krakenCross?: [string, string] };
+  /**
+   * Live WebSocket feed (see live.ts). Matches the candle source so history and ticks agree.
+   * Several venues = fallbacks; the chart switches to whichever one /api/candles actually served.
+   */
+  live?: { binance?: string; binanceFutures?: string; okx?: string; hyperliquid?: string; kraken?: string; krakenCross?: [string, string] };
 }
 
 export const INSTRUMENTS: Instrument[] = [
   { id: "XAUUSD", label: "XAU/USD", name: "Gold / US Dollar", kind: "metal", base: "XAU", quote: "USD", pip: 0.1, contract: 100, digits: 2,
-    src: { twelve: "XAU/USD", krakenProxy: { pair: "XAUTUSD", note: "xaut" }, yahoo: "GC=F" }, live: { kraken: "XAUT/USD" } },
+    src: { binanceFutures: "XAUUSDT", okx: "XAU-USDT-SWAP", hyperliquid: "xyz:GOLD", twelve: "XAU/USD", krakenProxy: { pair: "XAUTUSD", note: "xaut" }, yahoo: "GC=F" },
+    live: { binanceFutures: "XAUUSDT", okx: "XAU-USDT-SWAP", hyperliquid: "xyz:GOLD", kraken: "XAUT/USD" } },
   { id: "EURUSD", label: "EUR/USD", name: "Euro / US Dollar", kind: "forex", base: "EUR", quote: "USD", pip: 0.0001, contract: 100_000, digits: 5, src: { twelve: "EUR/USD", kraken: "EURUSD", yahoo: "EURUSD=X" }, live: { kraken: "EUR/USD" } },
   { id: "GBPUSD", label: "GBP/USD", name: "British Pound / US Dollar", kind: "forex", base: "GBP", quote: "USD", pip: 0.0001, contract: 100_000, digits: 5, src: { twelve: "GBP/USD", kraken: "GBPUSD", yahoo: "GBPUSD=X" }, live: { kraken: "GBP/USD" } },
   { id: "USDJPY", label: "USD/JPY", name: "US Dollar / Japanese Yen", kind: "forex", base: "USD", quote: "JPY", pip: 0.01, contract: 100_000, digits: 3, src: { twelve: "USD/JPY", kraken: "USDJPY", yahoo: "JPY=X" }, live: { kraken: "USD/JPY" } },

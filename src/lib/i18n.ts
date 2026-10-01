@@ -439,6 +439,7 @@ const en = {
   "tier.ultimate.f4": "Everything in Pro",
 
   // data source notes
+  "note.perp": "Live gold from a perpetual contract that tracks spot XAU/USD, so prices can differ from your broker by a few dollars. Trades 24/7, so weekends move while spot gold is closed.",
   "note.xaut": "Live gold from Kraken XAUT (tokenised gold, 1 token = 1 troy oz). Trades 24/7, so weekends move while spot gold is closed.",
   "note.cross": "Synthetic cross rate built from Kraken GBP/USD × USD/JPY.",
   "note.backup": "Backup source — not live.",
@@ -1018,6 +1019,7 @@ const id: Record<Key, string> = {
   "tier.ultimate.f3": "Uraian dampak berita",
   "tier.ultimate.f4": "Semua fitur Pro",
 
+  "note.perp": "Emas live dari kontrak perpetual yang mengikuti harga spot XAU/USD, jadi harganya bisa berbeda beberapa dolar dari broker kamu. Diperdagangkan 24/7, jadi tetap bergerak di akhir pekan saat emas spot tutup.",
   "note.xaut": "Emas live dari Kraken XAUT (emas tokenisasi, 1 token = 1 troy ons). Diperdagangkan 24/7, jadi tetap bergerak di akhir pekan saat emas spot tutup.",
   "note.cross": "Kurs cross sintetis dari Kraken GBP/USD × USD/JPY.",
   "note.backup": "Sumber cadangan — tidak live.",
