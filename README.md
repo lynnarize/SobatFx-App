@@ -40,13 +40,8 @@ No deposits, no broker connection, no order execution. Users only pay (QRIS or b
   Server error messages follow it too, and the AI replies in the language the user writes in, falling back to the app language.
   All strings are in `src/lib/i18n.ts`; TypeScript fails the build if a key is missing from either language.
 
-## AI tiers (server-side only)
+## AI (server-side only)
 
-| Tier | Provider | Default model | Env |
-|---|---|---|---|
-| Free | OpenRouter | `inclusionai/ling-3.0-flash-fin:free` (finance-tuned, text-only; fallbacks Nemotron 3 Ultra → 3.5 Lightning) | `OPENROUTER_API_KEY`, `FREE_MODEL`, `FREE_FALLBACK_MODELS`, `FREE_MODEL_VISION` |
-| Pro | OpenRouter by default (any OpenAI-compatible API via `PRO_BASE_URL`) | `qwen/qwen3.8-max-0902` (fallback Qwen 3.8 Flash) | `OPENROUTER_API_KEY` or `PRO_API_KEY`, `PRO_MODEL`, `PRO_FALLBACK_MODELS`, `PRO_BASE_URL` |
-| Ultra (id `ultimate`) | Anthropic | `claude-opus-5-5` | `ANTHROPIC_API_KEY`, `ULTIMATE_MODEL`, `ULTIMATE_EFFORT` |
 
 How the model stays hidden:
 1. Model IDs and keys exist only in `src/lib/ai/providers.ts` and server env vars. They never appear in responses, headers or client code.
@@ -54,7 +49,7 @@ How the model stays hidden:
 3. An output filter (`src/lib/ai/sanitize.ts`) removes model/vendor names from the stream, even when a name is split across chunks.
 4. Provider errors are logged on the server and replaced with generic messages.
 
-How the AI learns from the market (ideas from FinGPT and FinRL, adapted for hosted models that can't be fine-tuned):
+How the AI learns from the market (adapted for hosted models that can't be fine-tuned):
 - **Track record** (`src/lib/ai/track.ts`): every Pro/Ultra trade plan drawn on the chart is stored and later scored against real candles
   (TP first, SL first, or 60 bars then marked at market). The instrument's record, split by side, timeframe, regime and trend alignment,
   goes back into the AI's context, so it tightens up on setups that have been losing. Free doesn't see it, since Free gets no trade plans.
@@ -90,20 +85,6 @@ npm run eval:ai -- all   # free + pro + ultimate
 ```
 
 `eval:ai` calls the real models, so it uses your API credit. Full answers are written to `scripts/eval-results-<tier>.md`.
-
-## Temporary demo (no Google login)
-
-Set `DEMO_MODE=true` to put the app online without Google login:
-- each visitor gets an anonymous demo account, with the usual per-tier daily limits;
-- a **Free / Pro / Ultra** switch in the AI chat box changes tier instantly;
-- payments are turned off.
-
-Protect your AI credits:
-- `DEMO_DAILY_CAP` (default 300): total AI requests per day across all demo visitors.
-
-The tier switch also works locally with `DEV_SKIP_AUTH`. For real users (demo off), the switch only shows their paid plan, and the other tiers link to the plans page.
-`DEMO_PRO_VIA_OPENCODE=true` (plus `OPENCODE_GO_API_KEY`) runs demo Pro through your OpenCode Go subscription instead of OpenRouter. OpenCode Go is meant for coding agents and they monitor traffic, so keep the demo small. This stops automatically once `DEMO_MODE` is off.
-Turn `DEMO_MODE` off before launching for real.
 
 ## Protecting the AI
 
