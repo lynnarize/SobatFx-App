@@ -167,7 +167,8 @@ export function TradingChart() {
       timeframe: "",
       callbacks: {
         onAdd: (d) => actions.current.mutate((all) => [...all, roundPrices({ ...d, by: "user" }, latest.current.digits)]),
-        onUpdate: (d) => actions.current.mutate((all) => all.map((x) => (x.id === d.id ? roundPrices({ ...x, ...d }, latest.current.digits) : x))),
+        // Moving an AI drawing makes it the user's: AI redraws and "Clear AI" no longer touch it.
+        onUpdate: (d) => actions.current.mutate((all) => all.map((x) => (x.id === d.id ? roundPrices({ ...x, ...d, by: "user" }, latest.current.digits) : x))),
         onRemove: (id) => actions.current.mutate((all) => all.filter((x) => x.id !== id)),
         onToolFinished: () => setTool("none"),
         onSelectionChange: (ids) => setSelectedId(ids[ids.length - 1] ?? null),
@@ -461,7 +462,8 @@ export function TradingChart() {
       {selected && (
         <SelectedPanel
           d={selected}
-          onChange={(p) => mutate((all) => all.map((x) => (x.id === selected.id ? ({ ...x, ...p } as Drawing) : x)))}
+          // Editing an AI drawing makes it the user's (just hiding it doesn't).
+          onChange={(p) => mutate((all) => all.map((x) => (x.id === selected.id ? ({ ...x, ...p, ...(Object.keys(p).some((k) => k !== "hidden") && { by: "user" }) } as Drawing) : x)))}
           onDelete={() => {
             mutate((all) => all.filter((x) => x.id !== selected.id));
             setSelectedId(null);

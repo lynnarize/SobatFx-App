@@ -336,6 +336,8 @@ function renderText(scope: BitmapCoordinatesRenderingScope, e: ResolvedEntry): v
 // ── Position tool (long/short risk-reward) ───────────────────────────────────
 
 const POS_GREEN = "#089981";
+/** SobatFX: CSS-px area the chart's LIVE badge covers (TradingChart's LiveBadge) — pinned readouts keep out of it. */
+const TOP_LEFT_BADGE = { w: 150, h: 40 };
 const POS_RED = "#f23645";
 
 function renderPosition(
@@ -355,8 +357,10 @@ function renderPosition(
   const lines = positionReadout(e.d, info);
   if (lines.length > 0) {
     // Pinned to the top-right corner of the pane (not next to the zone) so it never covers the candles.
+    // On a narrow chart it would reach the host's status badge in the top-left corner, so it drops below it.
     const margin = 8 * scope.verticalPixelRatio;
-    const h = drawLabelBox(scope, scope.bitmapSize.width - margin, margin + stack.y, lines, e.d.color);
+    const badge = { right: TOP_LEFT_BADGE.w * scope.horizontalPixelRatio, bottom: TOP_LEFT_BADGE.h * scope.verticalPixelRatio };
+    const h = drawLabelBox(scope, scope.bitmapSize.width - margin, margin + stack.y, lines, e.d.color, badge);
     stack.y += h + margin / 2;
   }
 }
@@ -423,13 +427,15 @@ function signPct(v: number, entry: number): string {
 }
 
 // Reusable dark readout box (position stats, text labels).
-/** Draws a boxed text block with its top-right corner at (x, y), kept inside the pane. Returns the box height. */
+/** Draws a boxed text block with its top-right corner at (x, y), kept inside the pane. Returns how far below `y` it ends. */
 function drawLabelBox(
   scope: BitmapCoordinatesRenderingScope,
   x: number,
   y: number,
   lines: string[],
   borderColor: string,
+  /** A top-left area (bitmap px) to stay out of: if the box would overlap it, it moves down below it. */
+  avoid?: { right: number; bottom: number },
 ): number {
   const ctx = scope.context;
   const hpr = scope.horizontalPixelRatio;
@@ -441,7 +447,8 @@ function drawLabelBox(
   const width = Math.max(...lines.map((l) => ctx.measureText(l).width)) + pad * 2;
   const height = lines.length * lineH + pad;
   const bx = Math.min(Math.max(x - width, 0), scope.bitmapSize.width - width);
-  const by = Math.min(Math.max(y, 0), scope.bitmapSize.height - height);
+  const top = avoid && bx < avoid.right && y < avoid.bottom ? y + avoid.bottom : y;
+  const by = Math.min(Math.max(top, 0), scope.bitmapSize.height - height);
   ctx.fillStyle = "rgba(20, 24, 35, 0.92)";
   ctx.beginPath();
   ctx.roundRect(bx, by, width, height, 4 * hpr);
@@ -453,7 +460,7 @@ function drawLabelBox(
   ctx.textBaseline = "top";
   lines.forEach((l, i) => ctx.fillText(l, bx + pad, by + pad / 2 + i * lineH));
   ctx.restore();
-  return height;
+  return by + height - y;
 }
 
 function renderTrendline(scope: BitmapCoordinatesRenderingScope, e: ResolvedEntry): void {

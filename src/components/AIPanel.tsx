@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extractAnnotations, prepareUpload } from "@/lib/annotate";
 import { journalForAI } from "@/lib/paper";
-import { MIN_RR, type RejectedPlan, describeDrawings, extractDrawings } from "@/lib/drawings";
+import { MIN_RR, type Drawing, type RejectedPlan, asksForDrawing, describeDrawings, extractDrawings } from "@/lib/drawings";
 import { AnnotatedImage } from "./AnnotatedImage";
 import { checkPlans, type PlanCheck } from "@/lib/ai/lot-check";
 import { adx, atr, bollinger, ema, macd, rsi, swings, turbulence } from "@/lib/market/indicators";
@@ -27,7 +27,10 @@ interface Msg {
   image?: string;
   /** The AI sent a drawing block the app couldn't use. */
   drawFailed?: boolean;
+  /** Old saved chats only: how many drawings were added. */
   drew?: number;
+  /** The chart drawings from this reply. Whether they're on the chart is read from the chart itself (by id). */
+  draw?: { items: Drawing[]; symbol: string };
   /** Trade plans the AI sent that were not drawn because their R:R was below the minimum. */
   rejected?: RejectedPlan[];
   /** The app's own lot sizing for each trade plan the AI drew (the AI's arithmetic can be wrong). */
@@ -209,11 +212,14 @@ export function AIPanel() {
         if (me?.tier === "free") aiDraw = aiDraw.filter((d) => d.type !== "position");
         // Mark-up of an uploaded picture is drawn on that picture, never on the live chart.
         if (upload) aiDraw = [];
-        if (aiDraw.length && onChart) setDrawings((all) => [...all.filter((d) => d.by !== "ai"), ...aiDraw]);
+        // New drawings replace the old AI ones only when the user asked for an analysis/drawing or there are none yet.
+        // Otherwise (follow-ups, reviews…) they're offered in the reply and the user decides.
+        const replace = asksForDrawing(text) || !drawings.some((d) => d.by === "ai");
+        if (aiDraw.length && onChart && replace) setDrawings((all) => [...all.filter((d) => d.by !== "ai"), ...aiDraw]);
         const sizeInst = getInstrument(symbol);
         const checks = sizeInst ? checkPlans(parsed.text, aiDraw, sizeInst, risk, rates) : [];
         const sizing = checks.length ? { checks, currency: risk.currency, riskPct: risk.riskPct, digits: sizeInst!.digits } : undefined;
-        update((m) => ({ ...m, content: full, drew: onChart ? aiDraw.length : 0, drawFailed: onChart && !upload && parsed.unreadable, rejected: onChart && !upload && me?.tier !== "free" ? parsed.rejected : undefined, sizing }));
+        update((m) => ({ ...m, content: full, draw: onChart && aiDraw.length ? { items: aiDraw, symbol } : undefined, drawFailed: onChart && !upload && parsed.unreadable, rejected: onChart && !upload && me?.tier !== "free" ? parsed.rejected : undefined, sizing }));
       } catch (e) {
         if ((e as Error).name === "AbortError") update((m) => ({ ...m, content: m.content + `\n\n_${t("ai.stopped")}_` }));
         else update(() => ({ role: "assistant", content: t("ai.connection"), error: "other" }));
@@ -223,7 +229,7 @@ export function AIPanel() {
         refreshMe();
       }
     },
-    [busy, me, msgs, onChart, ws.chart, buildContext, candles, interval, setDrawings, refreshMe, t, symbol, risk, rates],
+    [busy, me, msgs, onChart, ws.chart, buildContext, candles, interval, drawings, setDrawings, refreshMe, t, symbol, risk, rates],
   );
 
   // Requests coming from other parts of the app ("Ask AI" buttons).
@@ -376,7 +382,8 @@ export function AIPanel() {
                       <PenLine size={12} className="mr-1 inline" /> {t("ai.drawFailed")}
                     </p>
                   )}
-                  {!!m.drew && (
+                  {m.draw && <DrawCard draw={m.draw} />}
+                  {!!m.drew && !m.draw && (
                     <div className="pop mt-2 flex items-center gap-2 rounded-lg border border-gold-deep/40 bg-gold-soft px-2.5 py-1.5 text-xs text-gold">
                       <PenLine size={12} /> {t("ai.drew", { n: m.drew })}
                       <button className="ml-auto flex items-center gap-1 text-muted hover:text-ink" onClick={() => setDrawings((all) => all.filter((d) => d.by !== "ai"))}>
@@ -505,5 +512,44 @@ export function AIPanel() {
         </p>
       </form>
     </aside>
+  );
+}
+
+/** A reply's chart drawings: on the chart (remove), offered (replace the AI's / add), or for another pair. */
+function DrawCard({ draw }: { draw: { items: Drawing[]; symbol: string } }) {
+  const { symbol, drawings, setDrawings } = useWs();
+  const { t } = useT();
+  const ids = new Set(draw.items.map((d) => d.id));
+  const n = draw.items.length;
+  if (draw.symbol !== symbol)
+    return (
+      <p className="mt-2 flex items-center gap-1.5 rounded-lg border border-line-2 bg-panel-2 px-2.5 py-1.5 text-xs text-muted">
+        <PenLine size={12} /> {t("ai.drawOther", { n, pair: getInstrument(draw.symbol)?.label ?? draw.symbol })}
+      </p>
+    );
+  if (drawings.some((d) => ids.has(d.id)))
+    return (
+      <div className="pop mt-2 flex items-center gap-2 rounded-lg border border-gold-deep/40 bg-gold-soft px-2.5 py-1.5 text-xs text-gold">
+        <PenLine size={12} /> {t("ai.drew", { n })}
+        {/* Only this reply's drawings, and not the ones the user has since moved or edited (they're theirs now). */}
+        <button className="ml-auto flex items-center gap-1 text-muted hover:text-ink" onClick={() => setDrawings((all) => all.filter((d) => !(ids.has(d.id) && d.by === "ai")))}>
+          <Eraser size={12} /> {t("ai.remove")}
+        </button>
+      </div>
+    );
+  return (
+    <div className="mt-2 rounded-lg border border-line-2 bg-panel-2 px-2.5 py-2 text-xs">
+      <p className="flex items-center gap-1.5 text-ink-2">
+        <PenLine size={12} className="text-gold" /> {t("ai.drawOffer", { n })}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button className="btn btn-gold h-7 text-xs" onClick={() => setDrawings((all) => [...all.filter((d) => d.by !== "ai"), ...draw.items])}>
+          {t("ai.drawReplace")}
+        </button>
+        <button className="btn h-7 text-xs" onClick={() => setDrawings((all) => [...all.filter((d) => !ids.has(d.id)), ...draw.items])}>
+          {t("ai.drawAdd")}
+        </button>
+      </div>
+    </div>
   );
 }

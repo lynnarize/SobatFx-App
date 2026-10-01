@@ -11,6 +11,7 @@ import {
   rejectTransfer,
   type Order,
 } from "./payments";
+import { isMonth, monthOf, revenueReport, salesFor } from "./revenue";
 import { kv } from "./store";
 import { adminIds, esc, isAdmin, send, tg } from "./telegram";
 import { isPaidTier, TIER_INFO, type PaidTier } from "./tiers";
@@ -19,7 +20,7 @@ import { effectiveTier, getUser } from "./users";
 // The owner's bank-transfer console, driven by Telegram webhook updates (POST /api/telegram/webhook).
 //   Customer → bot:  /start <orderId>, then a photo of the transfer proof        (optional: the site also has "I've paid")
 //   Owner   → bot:   ✅ Approve / ❌ Reject buttons on every claimed transfer,
-//                    /pending, /status <email>, /grant <email> <pro|ultra> [days]
+//                    /pending, /status <email>, /grant <email> <pro|ultra> [days], /revenue [YYYY-MM]
 // Every owner action checks the sender's Telegram id against TELEGRAM_ADMIN_IDS. Anything a customer can reach
 // only ever forwards a message to the owner: it never activates anything by itself.
 
@@ -112,6 +113,7 @@ const ADMIN_HELP = [
   "/pending — transfers waiting for you",
   "/status <code>email</code> — a customer's plan",
   "/grant <code>email pro|ultra [days]</code> — activate a plan by hand",
+  "/revenue <code>[YYYY-MM]</code> — sales this month (or that month)",
   "",
   "Customers' transfers arrive here with ✅ / ❌ buttons.",
 ].join("\n");
@@ -134,6 +136,12 @@ async function handleAdminCommand(m: Message, text: string) {
     if (!user) return send(chat, `No account for <code>${esc(email)}</code>. They have never signed in with that address.`);
     const { tier, until } = effectiveTier(user);
     return send(chat, `<code>${esc(email)}</code>\n${TIER_INFO[tier].label}${until ? ` until ${dateId(until)}` : ""}`);
+  }
+
+  if (cmd === "/revenue") {
+    const month = argOf(text) || monthOf(Date.now());
+    if (!isMonth(month)) return send(chat, "Usage: /revenue <code>[YYYY-MM]</code>\nExample: /revenue <code>2026-09</code>");
+    return send(chat, revenueReport(month, await salesFor(month)));
   }
 
   if (cmd === "/grant") {

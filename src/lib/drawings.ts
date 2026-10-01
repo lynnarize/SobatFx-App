@@ -19,6 +19,19 @@ const str = (v: unknown, max = 24) => (typeof v === "string" && v.trim() ? v.sli
 // Tolerates spacing/underscore variants of the fence name.
 const BLOCK = /```\s*sobatfx[-_ ]draw\s*([\s\S]*?)(```|$)/i;
 
+/** The user asked for no drawing at all. */
+export const NO_DRAW = /jangan (di)?gambar|tanpa gambar|don'?t draw|no drawings?/i;
+
+/**
+ * Does the user's message ask for a new chart analysis or drawing? Only then do the AI's drawings
+ * replace the ones already on the chart; otherwise they are offered as a proposal. "gambar" is also
+ * the Indonesian noun for "drawing", so "lihat gambar yang saya buat" (look at my drawing) doesn't count.
+ */
+export function asksForDrawing(text: string) {
+  if (NO_DRAW.test(text)) return false;
+  return /\b(?:re)?draw\b|\bmark\b|\bplot\b|\banaly[sz](?:e|is)\b|\banalisa|\banalisis|\btandai|\bgambar(?:kan|in)?\b(?!\s+(?:yang|saya|ku|milik))/i.test(text);
+}
+
 /** Smallest reward:risk a trade plan from the AI may have. Below this the plan is not drawn. */
 export const MIN_RR = 1;
 

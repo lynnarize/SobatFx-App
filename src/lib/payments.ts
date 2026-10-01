@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { announceSale, indexSale } from "./revenue";
 import { kv } from "./store";
 import { telegramConfigured } from "./telegram";
 import { grantTier } from "./users";
@@ -17,6 +18,8 @@ export interface Order {
   days: number;
   status: "pending" | "paid" | "expired" | "failed";
   createdAt: number;
+  /** When it was settled. Absent on orders paid before the sales book existed (see revenue.ts). */
+  paidAt?: number;
   /** Absent on orders created before bank transfer existed: those are QRIS. */
   method?: "qris" | "transfer" | "manual";
   qrString?: string;
@@ -96,11 +99,17 @@ export async function getOrder(id: string) {
   return kv.get<Order>(orderKey(id));
 }
 
-/** Grants the plan once per order, however many webhooks, polls or admin taps race each other. */
+/**
+ * Grants the plan once per order, however many webhooks, polls or admin taps race each other.
+ * Paid orders are kept forever: they are the sales book (revenue.ts). The order is indexed before the grant,
+ * so a sale can never be granted without being on record; a failed attempt leaves an index entry that reads skip.
+ */
 async function markPaid(order: Order): Promise<Order> {
   const lock = await kv.incr(`orderlock:${order.id}`);
   if (lock === 1) {
+    const paidAt = Date.now();
     try {
+      await indexSale(order.id, paidAt);
       await grantTier(order.email, order.tier, order.days);
     } catch (e) {
       // Release the lock so the next webhook retry, status poll or admin tap can grant it — the user has already paid.
@@ -108,7 +117,9 @@ async function markPaid(order: Order): Promise<Order> {
       throw e;
     }
     order.status = "paid";
-    await kv.set(orderKey(order.id), order, { ex: 365 * 86400 });
+    order.paidAt = paidAt;
+    await kv.set(orderKey(order.id), order);
+    await announceSale(order);
   }
   return (await getOrder(order.id)) ?? order;
 }
@@ -228,11 +239,13 @@ export async function rejectTransfer(id: string): Promise<{ order: Order; reject
   return { order, rejected: true };
 }
 
-/** Owner-typed grant (/grant email tier). Kept as a paid order so there is a record of who got what and when. */
+/** Owner-typed grant (/grant email tier). Kept as a paid order (amount 0) so the sales book shows who got what and when. */
 export async function grantManually(email: string, tier: PaidTier, days: number, by: string) {
+  const now = Date.now();
+  const order: Order = { id: newOrderId(tier, "M"), email, tier, amount: 0, days, status: "paid", createdAt: now, paidAt: now, method: "manual", note: by };
+  await indexSale(order.id, now);
   const user = await grantTier(email, tier, days);
-  const order: Order = { id: newOrderId(tier, "M"), email, tier, amount: 0, days, status: "paid", createdAt: Date.now(), method: "manual", note: by };
-  await kv.set(orderKey(order.id), order, { ex: 365 * 86400 });
+  await kv.set(orderKey(order.id), order);
   return user;
 }
 

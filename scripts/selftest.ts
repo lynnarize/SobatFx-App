@@ -5,14 +5,15 @@ import path from "node:path";
 import { contextBlock, systemPrompt } from "../src/lib/ai/prompt";
 import { scrub, streamScrubber } from "../src/lib/ai/sanitize";
 import { formatMtf, higherTimeframes, summarizeTf } from "../src/lib/ai/mtf";
-import { extractDrawings } from "../src/lib/drawings";
+import { asksForDrawing, extractDrawings } from "../src/lib/drawings";
 import { checkPlans, lotsInText } from "../src/lib/ai/lot-check";
 import { fingerprint, hasContent, mergeData, type SyncData } from "../src/lib/sync";
 import { emptyData, loadDoc, saveDoc, syncDataSchema } from "../src/lib/sync-store";
 import { acquireSlot, clientIp, hit, isSameOrigin, readJson } from "../src/lib/guard";
 import { parseLooseJson } from "../src/lib/loose-json";
 import { instrumentName, translate } from "../src/lib/i18n";
-import { createTransferOrder, displayStatus, getOrder } from "../src/lib/payments";
+import { createQrisOrder, createTransferOrder, displayStatus, getOrder, syncOrder } from "../src/lib/payments";
+import { indexSale, monthOf, salesCsv, salesFor, summarize } from "../src/lib/revenue";
 import { handleUpdate, notifyClaim, parseGrant, type Update } from "../src/lib/telegram-bot";
 import { validWebhookSecret } from "../src/lib/telegram";
 import { effectiveTier, getUser } from "../src/lib/users";
@@ -37,6 +38,25 @@ test("XAU/USD lot: $1000, 1%, $5 SL → 0.02", () => assert.equal(positionSize(i
 test("XAU/USD pip value = $10/lot", () => assert.equal(pipValueUsd(inst("XAUUSD"), 4200), 10));
 test("USD/JPY pip value @150 ≈ $6.67", () => assert.equal(pipValueUsd(inst("USDJPY"), 150).toFixed(2), "6.67"));
 test("GBP/JPY uses USDJPY rate", () => assert.equal(pipValueUsd(inst("GBPJPY"), 200, { USDJPY: 150 }).toFixed(2), "6.67"));
+test("only analysis/drawing requests replace the AI's drawings", () => {
+  for (const yes of [
+    "Analyze this chart: bias, key levels. Draw the key levels.",
+    "Analisis chart ini: bias, level kunci. Gambar level kuncinya.",
+    "Tandai zona support dan resistance paling penting di chart saya.",
+    "Mark the most important support and resistance zones on my chart.",
+    "gambar ulang dong",
+    "tolong analisa xauusd",
+  ])
+    assert.equal(asksForDrawing(yes), true, yes);
+  for (const no of [
+    "Lihat gambar yang saya buat di chart. Apakah level dan rencana trading saya masuk akal?",
+    "Look at what I drew on the chart. Are my levels sensible?",
+    'Tinjau posisi yang saya pilih di chart: {"type":"position","entry":84150}. Apakah posisinya sudah tepat?',
+    "kenapa harga turun?",
+    "analisa tapi jangan gambar apa-apa",
+  ])
+    assert.equal(asksForDrawing(no), false, no);
+});
 test("AI trade plans under 1:1 R:R are refused, not drawn", () => {
   const block = (p: string) => "Plan.\n```sobatfx-draw\n" + JSON.stringify({ drawings: [{ type: "hline", price: 84490 }, JSON.parse(p)] }) + "\n```";
   const bad = extractDrawings(block('{"type":"position","side":"short","entry":84155,"sl":85100,"tp":83968,"t1":1}'));
@@ -689,6 +709,71 @@ void (async () => {
       assert.ok(JSON.stringify(copies[0].body.reply_markup).includes(`ok:${second.id}`));
       assert.ok((await getOrder(second.id))!.claimedAt, "sending proof marks the order as claimed");
       assert.equal(effectiveTier(await getUser(`proof-${tag}@test.com`)).tier, "free", "proof alone never activates");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+  await atest("sales book: QRIS + transfer + /grant recorded once, alert once, /revenue and CSV", async () => {
+    const env = process.env as Record<string, string | undefined>;
+    Object.assign(env, { MIDTRANS_SERVER_KEY: "k", TELEGRAM_BOT_TOKEN: "t", TELEGRAM_WEBHOOK_SECRET: "s3cret", TELEGRAM_ADMIN_IDS: "111,222", PRO_PRICE_IDR: "99000", ULTIMATE_PRICE_IDR: "299000" });
+    const sent: { chat: unknown; text: string; markup?: unknown }[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: { body?: string }) => {
+      const u = String(url);
+      if (u.endsWith("/v2/charge")) return Response.json({ status_code: "201", qr_string: "QR" });
+      if (u.endsWith("/status")) return Response.json({ transaction_status: "settlement", gross_amount: "299000.00" });
+      const body = JSON.parse(init?.body ?? "{}");
+      if (u.endsWith("/sendMessage")) sent.push({ chat: body.chat_id, text: body.text, markup: body.reply_markup });
+      return Response.json({ ok: true, result: { message_id: 1 } });
+    }) as unknown as typeof fetch;
+    try {
+      const tag = Date.now();
+      const month = monthOf(Date.now());
+      const before = summarize(await salesFor(month));
+
+      const q = await createQrisOrder(`qris-${tag}@test.com`, "ultimate");
+      assert.equal((await salesFor(month)).some((o) => o.id === q.id), false, "unpaid orders are not in the book");
+      const paid = (await syncOrder(q.id))!;
+      assert.equal(paid.status, "paid");
+      assert.ok(paid.paidAt && Math.abs(paid.paidAt - Date.now()) < 5000);
+      await syncOrder(q.id);
+      const alerts = sent.filter((m) => m.text.includes("New sale"));
+      assert.deepEqual(alerts.map((m) => m.chat), [111, 222], "one alert per admin, once");
+      assert.ok(alerts[0].text.includes("299.000") && alerts[0].text.includes(q.id));
+
+      await indexSale(q.id, Date.now()); // a retried grant can index twice
+      await indexSale(q.id, Date.UTC(2020, 0, 15)); // or in a month it was not paid in
+      assert.equal((await salesFor(month)).filter((o) => o.id === q.id).length, 1, "counted once");
+      assert.equal((await salesFor("2020-01")).length, 0, "only the month it was paid in");
+
+      const tap = (data: string): Update => ({ callback_query: { id: "cb", from: { id: 111 }, data, message: { message_id: 5, chat: { id: 111, type: "private" } } } });
+      const msg = (text: string): Update => ({ message: { message_id: 9, from: { id: 111 }, chat: { id: 111, type: "private" }, text } });
+      Object.assign(env, { BANK_NAME: "BCA", BANK_ACCOUNT_NUMBER: "123", BANK_ACCOUNT_HOLDER: "SobatFX" });
+      const t = await createTransferOrder(`transfer-${tag}@test.com`, "pro");
+      await handleUpdate(tap(`ok:${t.id}`));
+      assert.ok(!sent.some((m) => m.text.includes("New sale") && m.text.includes(t.id)), "approved transfers are not announced again");
+      sent.length = 0;
+      await handleUpdate(msg(`/grant gift-${tag}@test.com pro 7`));
+      await handleUpdate(tap(`gy:${JSON.stringify(sent.at(-1)!.markup).match(/gy:([a-f0-9]+)/)![1]}`));
+
+      const book = await salesFor(month);
+      const mine = book.filter((o) => o.email.endsWith(`-${tag}@test.com`));
+      assert.deepEqual(mine.map((o) => o.method), ["qris", "transfer", "manual"], "oldest first, every way of paying");
+      const after = summarize(book);
+      assert.equal(after.total - before.total, 299000 + t.amount, "a free /grant is not income");
+      assert.equal(after.count - before.count, 2);
+      assert.equal(after.freeGrants - before.freeGrants, 1);
+
+      sent.length = 0;
+      await handleUpdate(msg("/revenue"));
+      assert.ok(sent[0].text.includes((after.total).toLocaleString("id-ID")), "/revenue shows this month's total");
+      await handleUpdate(msg("/revenue 2026-13"));
+      assert.ok(sent[1].text.startsWith("Usage"));
+
+      const csv = salesCsv([{ ...mine[2], note: 'telegram:1, "x"' }]).split("\n");
+      assert.equal(csv[0], "order_id,paid_at_wib,method,plan,days,amount_idr,counts_as_income,email,note");
+      assert.ok(csv[1].endsWith(`,manual,Pro,7,0,no,gift-${tag}@test.com,"telegram:1, ""x"""`), csv[1]);
+      assert.equal(monthOf(Date.UTC(2026, 8, 30, 17, 30)), "2026-10", "00:30 WIB on 1 Oct is October");
     } finally {
       globalThis.fetch = realFetch;
     }

@@ -40,8 +40,7 @@ No deposits, no broker connection, no order execution. Users only pay (QRIS or b
   Server error messages follow it too, and the AI replies in the language the user writes in, falling back to the app language.
   All strings are in `src/lib/i18n.ts`; TypeScript fails the build if a key is missing from either language.
 
-## AI (server-side only)
-
+## AI tiers (server-side only)
 
 How the model stays hidden:
 1. Model IDs and keys exist only in `src/lib/ai/providers.ts` and server env vars. They never appear in responses, headers or client code.
@@ -49,7 +48,7 @@ How the model stays hidden:
 3. An output filter (`src/lib/ai/sanitize.ts`) removes model/vendor names from the stream, even when a name is split across chunks.
 4. Provider errors are logged on the server and replaced with generic messages.
 
-How the AI learns from the market (adapted for hosted models that can't be fine-tuned):
+How the AI learns from the market (ideas from FinGPT and FinRL, adapted for hosted models that can't be fine-tuned):
 - **Track record** (`src/lib/ai/track.ts`): every Pro/Ultra trade plan drawn on the chart is stored and later scored against real candles
   (TP first, SL first, or 60 bars then marked at market). The instrument's record, split by side, timeframe, regime and trend alignment,
   goes back into the AI's context, so it tightens up on setups that have been losing. Free doesn't see it, since Free gets no trade plans.
@@ -58,6 +57,7 @@ How the AI learns from the market (adapted for hosted models that can't be fine-
   The prompt asks for a top-down read and to treat a conflict as counter-trend. Free never gets it.
 - **Regime**: a turbulence index (Mahalanobis distance of return and range against the last ~250 candles), plus MACD, Bollinger and ADX.
   At or above the 90th percentile, the AI prefers waiting, half risk and wider stops.
+- `npm run export:revenue -- 2026-10` (or `-- 2026` for a year) writes the sales book as CSV (`scripts/revenue-<period>.csv`) and prints the totals. See *Revenue* below.
 - `npm run export:plans` writes the scored plans as a labelled JSONL dataset (`scripts/plans-dataset.jsonl`), for evaluation or future LoRA tuning.
 
 Scope: the AI only answers about forex, gold, crypto, trading, risk, news and the app itself, and politely declines everything else.
@@ -85,6 +85,20 @@ npm run eval:ai -- all   # free + pro + ultimate
 ```
 
 `eval:ai` calls the real models, so it uses your API credit. Full answers are written to `scripts/eval-results-<tier>.md`.
+
+## Temporary demo (no Google login)
+
+Set `DEMO_MODE=true` to put the app online without Google login:
+- each visitor gets an anonymous demo account, with the usual per-tier daily limits;
+- a **Free / Pro / Ultra** switch in the AI chat box changes tier instantly;
+- payments are turned off.
+
+Protect your AI credits:
+- `DEMO_DAILY_CAP` (default 300): total AI requests per day across all demo visitors.
+
+The tier switch also works locally with `DEV_SKIP_AUTH`. For real users (demo off), the switch only shows their paid plan, and the other tiers link to the plans page.
+`DEMO_PRO_VIA_OPENCODE=true` (plus `OPENCODE_GO_API_KEY`) runs demo Pro through your OpenCode Go subscription instead of OpenRouter. OpenCode Go is meant for coding agents and they monitor traffic, so keep the demo small. This stops automatically once `DEMO_MODE` is off.
+Turn `DEMO_MODE` off before launching for real.
 
 ## Protecting the AI
 
@@ -141,8 +155,22 @@ Granting is idempotent.
 code (Rp 99.247, reserved for 24 h so two open orders never share it) → they transfer and press *I've paid* (optionally sending a
 screenshot to the bot) → every admin gets the order with ✅ / ❌ buttons → **check your bank statement for exactly that amount**, then
 tap Approve → the same idempotent grant as QRIS runs and the customer's dialog flips to "paid".
-Admin commands in the bot (admin ids only): `/pending`, `/status email`, and `/grant email pro|ultra [days]` for cases outside the site
+Admin commands in the bot (admin ids only): `/pending`, `/status email`, `/revenue [YYYY-MM]`, and `/grant email pro|ultra [days]` for cases outside the site
 flow (it shows what it understood and asks you to confirm before anything is activated). A screenshot alone is never proof.
+
+### Revenue
+
+Every paid order is the sales record (`src/lib/revenue.ts`): it is kept forever with its `paidAt` time and listed under the month it was
+paid in (Jakarta time, `revenue:YYYY-MM` in Redis). Both QRIS and approved transfers go through the same `markPaid()`, so none are missed.
+`/grant` activations are listed too, with amount 0, and never count as income.
+
+- **Each QRIS sale** is announced to the admins in Telegram with the month's running total (transfers you approve yourself).
+- **`/revenue`** in the bot: this month's total, split by plan and payment method. `/revenue 2026-09` for another month.
+- **`npm run export:revenue -- 2026-10`** (or `-- 2026`): CSV with one row per order for your books. Run it with the production
+  `KV_REST_API_URL` / `KV_REST_API_TOKEN` in `.env.local`.
+
+QRIS amounts are gross: the Midtrans fee comes off at settlement, so reconcile against the Midtrans dashboard (Transactions → settlement)
+and transfers against your bank statement. Sales paid before the sales book existed are not listed; use those two sources for them.
 
 ## Market data (live)
 
@@ -171,6 +199,7 @@ src/lib/market/      instruments, candle sources, indicators, risk maths
 src/lib/news.ts      calendar + RSS + AI news digest
 src/lib/payments.ts  Midtrans QRIS + bank-transfer orders
 src/lib/telegram-bot.ts  admin approval bot (webhook: api/telegram/webhook)
+src/lib/revenue.ts  sales book: monthly index, /revenue report, QRIS sale alert, CSV
 src/lib/users.ts     tiers, expiry, usage limits
 src/lib/opencharts/  OpenCharts drawing tools (MIT, vendored and adapted to lightweight-charts v5)
 src/lib/market/live.ts  WebSocket price feeds

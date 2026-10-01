@@ -11,6 +11,8 @@ interface KV {
   mget<T>(keys: string[]): Promise<(T | null)[]>;
   /** Prepend to a list and keep only the newest `max` items. */
   lpushCapped(key: string, value: string, max: number): Promise<void>;
+  /** Append to a list, uncapped (permanent logs). */
+  rpush(key: string, value: string): Promise<void>;
   lrange(key: string, start: number, stop: number): Promise<string[]>;
 }
 
@@ -30,6 +32,9 @@ function redisKV(url: string, token: string): KV {
     mget: async <T>(ks: string[]) => (ks.length ? r.mget<T[]>(...ks) : []),
     lpushCapped: async (k, v, max) => {
       await r.pipeline().lpush(k, v).ltrim(k, 0, max - 1).exec();
+    },
+    rpush: async (k, v) => {
+      await r.rpush(k, v);
     },
     lrange: (k, a, b) => r.lrange<string>(k, a, b),
   };
@@ -71,6 +76,10 @@ function memoryKV(): KV {
     lpushCapped: async (k, v, max) => {
       const e = live(k);
       m.set(k, { v: [v, ...((e?.v as string[]) ?? [])].slice(0, max), exp: e?.exp });
+    },
+    rpush: async (k, v) => {
+      const e = live(k);
+      m.set(k, { v: [...((e?.v as string[]) ?? []), v], exp: e?.exp });
     },
     lrange: async (k, a, b) => ((live(k)?.v as string[]) ?? []).slice(a, b < 0 ? undefined : b + 1),
   };

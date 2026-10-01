@@ -106,27 +106,35 @@ export default function Dashboard() {
         </h1>
       </div>
 
-      <div className="flex flex-wrap items-end gap-x-12 gap-y-4 py-5">
-        <div>
-          <div className="flex items-baseline gap-2">
-            <FlashNumber value={last} text={fmtPrice(last, inst.digits)} className="num -mx-1 px-1 text-3xl font-medium" />
-            {change != null && (
-              <span className={`num text-sm ${change >= 0 ? "text-up" : "text-down"}`}>
-                {change >= 0 ? "+" : ""}
-                {change.toFixed(inst.digits)} ({changePct!.toFixed(2)}%)
-              </span>
-            )}
+      {/* Price + ATR on the left; source + timeframe on the right, or on their own row once space runs out. */}
+      <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4 py-5">
+        <div className="flex flex-wrap items-end gap-x-10 gap-y-3">
+          <div>
+            <div className="flex items-baseline gap-2">
+              <FlashNumber value={last} text={fmtPrice(last, inst.digits)} className="num -mx-1 px-1 text-3xl font-medium" />
+              {change != null && (
+                <span className={`num text-sm ${change >= 0 ? "text-up" : "text-down"}`}>
+                  {change >= 0 ? "+" : ""}
+                  {change.toFixed(inst.digits)} ({changePct!.toFixed(2)}%)
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-xs text-muted">{t("dash.vsPrev", { p: prev ? fmtPrice(prev.close, inst.digits) : "" })}</div>
+            <div className="mt-0.5 flex items-center gap-1 text-[11px] text-gold/80">
+              <Info size={11} /> {t("dash.brokerNote")}
+            </div>
           </div>
-          <div className="mt-1 text-xs text-muted">{t("dash.vsPrev", { p: prev ? fmtPrice(prev.close, inst.digits) : "" })}</div>
-          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-gold/80">
-            <Info size={11} /> {t("dash.brokerNote")}
+          <div>
+            <div className="num text-2xl font-medium text-ink-2">{stats.atrPips != null ? stats.atrPips.toFixed(1) : "—"}</div>
+            <div className="mt-1 text-xs text-muted">{t("dash.atr", { tf: tfLabel })}</div>
           </div>
         </div>
-        <div>
-          <div className="num text-3xl font-medium text-ink-2">{stats.atrPips != null ? stats.atrPips.toFixed(1) : "—"}</div>
-          <div className="mt-1 text-xs text-muted">{t("dash.atr", { tf: tfLabel })}</div>
-        </div>
-        <div className="ml-auto flex flex-col items-end gap-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {source && (
+            <div className="flex items-center gap-1 text-[11px] text-muted" title={source.note && t(`note.${source.note}`)}>
+              {source.note && <Info size={11} />} {t("dash.data", { src: source.name })}
+            </div>
+          )}
           <div className="flex rounded-xl border border-line-2 bg-panel-2 p-1" role="tablist" aria-label={t("dash.timeframe")}>
             {INTERVALS.map((i) => (
               <button
@@ -140,11 +148,6 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
-          {source && (
-            <div className="flex items-center gap-1 text-[11px] text-muted" title={source.note && t(`note.${source.note}`)}>
-              {source.note && <Info size={11} />} {t("dash.data", { src: source.name })}
-            </div>
-          )}
         </div>
       </div>
 

@@ -10,6 +10,7 @@ import { scrub as scrubbed, streamScrubber } from "@/lib/ai/sanitize";
 import { mtfBlock } from "@/lib/ai/mtf";
 import { recordPlans, trackRecord } from "@/lib/ai/track";
 import { getInstrument, newsKeys } from "@/lib/market/symbols";
+import { asksForDrawing } from "@/lib/drawings";
 import { newsDigest } from "@/lib/news";
 import { consumeDemoCap, consumeUsage, refundDemoCap, refundUsage } from "@/lib/users";
 
@@ -32,7 +33,7 @@ const Context = z.object({
       lows: z.array(z.object({ time: z.number(), price: z.number() })).max(50),
     })
     .optional(),
-  drawings: z.array(z.unknown()).max(60).optional(),
+  drawings: z.array(z.looseObject({})).max(60).optional(),
   journal: z
     .object({
       summary: z.string().transform((s) => s.slice(0, 500)),
@@ -131,7 +132,7 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
   if (tier === "free" && parsed.data.imageSource === "upload") image = undefined;
   const imageKind = image ? (parsed.data.imageSource === "upload" ? "upload" : "chart") : false;
   // Reviewing the user's own drawings is a Pro feature: Free only sees the AI's own drawings.
-  if (tier === "free" && ctx?.drawings) ctx.drawings = (ctx.drawings as { by?: string }[]).filter((d) => d.by === "ai");
+  if (tier === "free" && ctx?.drawings) ctx.drawings = ctx.drawings.filter((d) => (d as { by?: unknown }).by === "ai");
   // Demo-trading journal review is Pro/Ultra only.
   if (tier === "free" && ctx) delete ctx.journal;
   // Lot sizing is Pro/Ultra too: without the pip value the context carries no step-by-step lot recipe.
@@ -214,8 +215,9 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
         // Safety net: a chart analysis must come with drawings. If the model described levels but sent
         // no sobatfx-draw block, ask it once more for just the block (not counted as a user request).
         const onChartPage = (ctx?.page ?? "chart") === "chart" && Boolean(ctx?.candles?.length);
-        const noDrawAsked = /jangan (di)?gambar|tanpa gambar|don'?t draw|no drawing/i.test(messages[messages.length - 1].content);
-        if (!looped && !noDrawAsked && imageKind !== "upload" && onChartPage && !/sobatfx[-_ ]draw/i.test(raw) && mentionsLevels(raw, ctx?.lastPrice)) {
+        // Only when the user asked for an analysis or drawing: follow-up questions don't need fresh drawings.
+        const drawAsked = asksForDrawing(messages[messages.length - 1].content);
+        if (!looped && drawAsked && imageKind !== "upload" && onChartPage && !/sobatfx[-_ ]draw/i.test(raw) && mentionsLevels(raw, ctx?.lastPrice)) {
           console.warn(`[ai] ${tier} reply without draw block (${raw.length} chars, ${Date.now() - started}ms) — asking for drawings`);
           let block = "";
           try {
