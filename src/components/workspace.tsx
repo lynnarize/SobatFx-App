@@ -8,6 +8,7 @@ import { DEFAULT_RISK, type RiskSettings } from "@/lib/market/risk";
 import { type Candle, DEFAULT_WATCHLIST, type Interval, type SourceNote, getInstrument } from "@/lib/market/symbols";
 import type { SyncData } from "@/lib/sync";
 import type { Tier } from "@/lib/tiers";
+import { SignInConsentProvider } from "./SignInConsent";
 import { useCloudSync } from "./useCloudSync";
 
 // App-wide client state: current instrument, candles, drawings, risk settings,
@@ -109,7 +110,9 @@ function useStored<T>(key: string, initial: T) {
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <SessionProvider>
-      <WorkspaceProvider>{children}</WorkspaceProvider>
+      <SignInConsentProvider>
+        <WorkspaceProvider>{children}</WorkspaceProvider>
+      </SignInConsentProvider>
     </SessionProvider>
   );
 }

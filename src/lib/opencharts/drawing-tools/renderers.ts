@@ -80,10 +80,16 @@ function drawHandle(scope: BitmapCoordinatesRenderingScope, p: BPt, color: strin
   ctx.restore();
 }
 
+/** Per-frame cursor for readouts pinned to the pane's top-right corner, so several stack instead of overlapping. */
+export interface ReadoutStack {
+  y: number;
+}
+
 export function renderEntry(
   scope: BitmapCoordinatesRenderingScope,
   e: ResolvedEntry,
   info: DrawCtxInfo,
+  stack: ReadoutStack = { y: 0 },
 ): void {
   switch (e.d.type) {
     case "trendline":
@@ -102,7 +108,7 @@ export function renderEntry(
       renderFibonacci(scope, e);
       break;
     case "position":
-      renderPosition(scope, e, info);
+      renderPosition(scope, e, info, stack);
       break;
     case "vertical":
       renderVertical(scope, e);
@@ -336,6 +342,7 @@ function renderPosition(
   scope: BitmapCoordinatesRenderingScope,
   e: ResolvedEntry,
   info: DrawCtxInfo,
+  stack: ReadoutStack,
 ): void {
   const { x1, x2, y1, yStop, yTarget } = e;
   if (x1 === null || x2 === null || y1 === null || yStop == null || yTarget == null) return;
@@ -347,8 +354,10 @@ function renderPosition(
   if (showHandles(e)) renderPositionHandles(scope, e, xa, xb, y1);
   const lines = positionReadout(e.d, info);
   if (lines.length > 0) {
-    const at = toBitmap(scope, xb + 8, y1);
-    drawLabelBox(scope, at.x, at.y, lines, e.d.color);
+    // Pinned to the top-right corner of the pane (not next to the zone) so it never covers the candles.
+    const margin = 8 * scope.verticalPixelRatio;
+    const h = drawLabelBox(scope, scope.bitmapSize.width - margin, margin + stack.y, lines, e.d.color);
+    stack.y += h + margin / 2;
   }
 }
 
@@ -414,13 +423,14 @@ function signPct(v: number, entry: number): string {
 }
 
 // Reusable dark readout box (position stats, text labels).
+/** Draws a boxed text block with its top-right corner at (x, y), kept inside the pane. Returns the box height. */
 function drawLabelBox(
   scope: BitmapCoordinatesRenderingScope,
   x: number,
   y: number,
   lines: string[],
   borderColor: string,
-): void {
+): number {
   const ctx = scope.context;
   const hpr = scope.horizontalPixelRatio;
   const vpr = scope.verticalPixelRatio;
@@ -430,7 +440,7 @@ function drawLabelBox(
   const pad = 6 * hpr;
   const width = Math.max(...lines.map((l) => ctx.measureText(l).width)) + pad * 2;
   const height = lines.length * lineH + pad;
-  const bx = Math.min(x, scope.bitmapSize.width - width);
+  const bx = Math.min(Math.max(x - width, 0), scope.bitmapSize.width - width);
   const by = Math.min(Math.max(y, 0), scope.bitmapSize.height - height);
   ctx.fillStyle = "rgba(20, 24, 35, 0.92)";
   ctx.beginPath();
@@ -443,6 +453,7 @@ function drawLabelBox(
   ctx.textBaseline = "top";
   lines.forEach((l, i) => ctx.fillText(l, bx + pad, by + pad / 2 + i * lineH));
   ctx.restore();
+  return height;
 }
 
 function renderTrendline(scope: BitmapCoordinatesRenderingScope, e: ResolvedEntry): void {

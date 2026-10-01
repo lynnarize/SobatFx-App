@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { kv } from "./store";
 import { telegramConfigured } from "./telegram";
 import { grantTier } from "./users";
-import type { PaidTier } from "./tiers";
+import { isPaidTier, type PaidTier } from "./tiers";
 
 // QRIS via Midtrans Core API (payment_type "qris").
 // Docs: https://docs.midtrans.com/reference/qris
@@ -41,7 +41,18 @@ const base = () => (process.env.MIDTRANS_IS_PRODUCTION === "true" ? "https://api
 const auth = () => "Basic " + Buffer.from(`${process.env.MIDTRANS_SERVER_KEY ?? ""}:`).toString("base64");
 const orderKey = (id: string) => `order:${id}`;
 
-export const paymentsConfigured = () => Boolean(process.env.MIDTRANS_SERVER_KEY);
+/** QRIS_COMING_SOON=true keeps QRIS visible but switched off (the Midtrans webhook still settles any order already made). */
+export const qrisComingSoon = () => process.env.QRIS_COMING_SOON === "true";
+
+/** QRIS can take orders: Midtrans is set up and it hasn't been parked as "coming soon". */
+export const paymentsConfigured = () => Boolean(process.env.MIDTRANS_SERVER_KEY) && !qrisComingSoon();
+
+/** Plans that can be bought right now (PAID_TIERS, default "pro,ultimate"; "ultra" means ultimate). The others show "coming soon". */
+export const saleTiers = (): PaidTier[] =>
+  (process.env.PAID_TIERS ?? "pro,ultimate")
+    .split(",")
+    .map((s) => s.trim().toLowerCase().replace(/^ultra$/, "ultimate"))
+    .filter(isPaidTier);
 
 const newOrderId = (tier: PaidTier, kind = "") => `SFX-${kind}${tier.toUpperCase()}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`.toUpperCase();
 

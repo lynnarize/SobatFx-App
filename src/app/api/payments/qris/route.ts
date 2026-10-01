@@ -2,7 +2,7 @@ import QRCode from "qrcode";
 import { guard } from "@/lib/guard";
 import { currentEmail, demoMode } from "@/lib/auth";
 import { serverT } from "@/lib/i18n-server";
-import { createQrisOrder, paymentsConfigured } from "@/lib/payments";
+import { createQrisOrder, paymentsConfigured, saleTiers } from "@/lib/payments";
 import { isPaidTier } from "@/lib/tiers";
 
 export async function POST(req: Request) {
@@ -16,6 +16,7 @@ export async function POST(req: Request) {
   if (!paymentsConfigured()) return Response.json({ error: t("srv.paymentsOff") }, { status: 503 });
   const { tier } = await req.json().catch(() => ({}));
   if (!isPaidTier(tier)) return Response.json({ error: t("srv.unknownPlan") }, { status: 400 });
+  if (!saleTiers().includes(tier)) return Response.json({ error: t("up.comingSoon") }, { status: 403 });
   try {
     const order = await createQrisOrder(email, tier);
     const qr = await QRCode.toDataURL(order.qrString!, { margin: 1, width: 360, errorCorrectionLevel: "M" });

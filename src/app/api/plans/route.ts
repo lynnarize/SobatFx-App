@@ -1,6 +1,6 @@
 import { demoMode } from "@/lib/auth";
 import { getUsdIdr } from "@/lib/fx";
-import { plans, paymentsConfigured, transferConfigured } from "@/lib/payments";
+import { plans, paymentsConfigured, qrisComingSoon, saleTiers, transferConfigured } from "@/lib/payments";
 import { tierLimit } from "@/lib/users";
 
 export async function GET() {
@@ -11,6 +11,8 @@ export async function GET() {
   return Response.json({
     paymentsEnabled: paymentsConfigured() && !demoMode(),
     transferEnabled: transferConfigured() && !demoMode(),
+    qrisSoon: qrisComingSoon() && !demoMode(),
+    saleTiers: saleTiers(),
     demo: demoMode(),
     plans: {
       free: { priceIdr: 0, ...tierLimit("free") },

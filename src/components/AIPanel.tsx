@@ -1,7 +1,6 @@
 "use client";
 
 import { AlertTriangle, ArrowUp, Calculator, Camera, ImagePlus, Lock, Crown, Eraser, ImageOff, LogIn, PenLine, RotateCcw, Sparkles, Square, X } from "lucide-react";
-import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -17,6 +16,7 @@ import { TIER_INFO, TIER_ORDER, type Tier } from "@/lib/tiers";
 import { translate } from "@/lib/i18n";
 import { useT } from "./i18n";
 import { Markdown } from "./Markdown";
+import { useStartSignIn } from "./SignInConsent";
 import { useWs } from "./workspace";
 
 interface Msg {
@@ -52,6 +52,7 @@ export function AIPanel() {
   const { me, symbol, interval, candles, drawings, setDrawings, risk, source, pendingAsk, setAiOpen, refreshMe, paper, prices, rates } = ws;
   const pathname = usePathname();
   const { t } = useT();
+  const startSignIn = useStartSignIn();
   const [msgs, setMsgs] = useState<Msg[]>([]);
   // State, not a ref: saving starts only on the render that already holds the restored chat,
   // otherwise React's dev double-effect run saves [] over it first.
@@ -283,7 +284,7 @@ export function AIPanel() {
               <p>{t("ai.intro", { pair: inst.label })}</p>
             </div>
             {!me?.signedIn && me && (
-              <button className="btn btn-gold w-full justify-center" onClick={() => signIn("google")}>
+              <button className="btn btn-gold w-full justify-center" onClick={startSignIn}>
                 <LogIn size={16} /> {t("ai.signInFree")}
               </button>
             )}
@@ -328,7 +329,7 @@ export function AIPanel() {
                     </Link>
                   )}
                   {m.error === "auth" && (
-                    <button className="btn btn-gold mt-3 h-8 text-xs" onClick={() => signIn("google")}>
+                    <button className="btn btn-gold mt-3 h-8 text-xs" onClick={startSignIn}>
                       <LogIn size={14} /> {t("app.signIn")}
                     </button>
                   )}

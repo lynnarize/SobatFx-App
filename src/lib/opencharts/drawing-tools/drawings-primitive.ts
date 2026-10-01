@@ -24,7 +24,8 @@ class DrawingsPaneRenderer implements IPrimitivePaneRenderer {
 
   draw(target: CanvasRenderingTarget2D): void {
     target.useBitmapCoordinateSpace((scope) => {
-      for (const e of this._entries) renderEntry(scope, e, this._info);
+      const stack = { y: 0 };
+      for (const e of this._entries) renderEntry(scope, e, this._info, stack);
     });
   }
 }

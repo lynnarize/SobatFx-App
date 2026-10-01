@@ -1,16 +1,18 @@
 "use client";
 
 import { Check, CheckCircle2, Copy, Crown, Landmark, Loader2, LogIn, QrCode, Send, X } from "lucide-react";
-import { signIn } from "next-auth/react";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { useT } from "@/components/i18n";
+import { useStartSignIn } from "@/components/SignInConsent";
 import { useWs } from "@/components/workspace";
 import { type PaidTier, TIER_INFO, TIER_ORDER, type Tier } from "@/lib/tiers";
 
 interface Plans {
   paymentsEnabled: boolean;
   transferEnabled?: boolean;
+  qrisSoon?: boolean;
+  saleTiers?: PaidTier[];
   plans: Record<Tier, { priceIdr: number; listPriceUsd?: number; listPriceIdr?: number; days?: number; limit: number; period: "daily" | "lifetime" }>;
 }
 interface Pay {
@@ -40,6 +42,7 @@ const idr = (n: number) => "Rp " + n.toLocaleString("id-ID");
 export default function UpgradePage() {
   const { me, refreshMe } = useWs();
   const { t, locale, lang } = useT();
+  const startSignIn = useStartSignIn();
   const [plans, setPlans] = useState<Plans | null>(null);
   const [pay, setPay] = useState<Pay | null>(null);
   const [transfer, setTransfer] = useState<TransferPay | null>(null);
@@ -51,7 +54,7 @@ export default function UpgradePage() {
   }, []);
 
   const buy = async (tier: PaidTier) => {
-    if (!me?.signedIn) return signIn("google");
+    if (!me?.signedIn) return startSignIn();
     setErr(null);
     setLoading(tier);
     try {
@@ -67,7 +70,7 @@ export default function UpgradePage() {
   };
 
   const buyTransfer = async (tier: PaidTier) => {
-    if (!me?.signedIn) return signIn("google");
+    if (!me?.signedIn) return startSignIn();
     setErr(null);
     setLoading(`${tier}-transfer`);
     try {
@@ -83,7 +86,7 @@ export default function UpgradePage() {
   };
 
   const current = me?.tier ?? "free";
-  const noPayment = plans !== null && !plans.paymentsEnabled && !plans.transferEnabled;
+  const noPayment = plans !== null && !plans.paymentsEnabled && !plans.transferEnabled && !plans.qrisSoon;
   const features = {
     free: ["tier.free.f1", "tier.free.f2", "tier.free.f3", "tier.free.f4", "tier.free.trading"],
     pro: ["tier.pro.smarter", "tier.pro.review", "tier.pro.journal", "tier.pro.upload", "tier.pro.f1", "tier.pro.f2", "tier.pro.f3", "tier.pro.f4"],
@@ -107,6 +110,7 @@ export default function UpgradePage() {
           const info = TIER_INFO[tier];
           const p = plans?.plans[tier];
           const featured = tier === "pro";
+          const forSale = !plans?.saleTiers || plans.saleTiers.includes(tier as PaidTier);
           return (
             <div key={tier} className={`card relative flex flex-col p-6 ${featured ? "border-gold-deep/60" : ""} ${tier === "ultimate" ? "bg-gradient-to-b from-[#1d1a14] to-panel-2" : ""}`}>
               {featured && <span className="absolute -top-2.5 left-6 rounded-full bg-gold px-2.5 py-0.5 text-[11px] font-semibold text-[#171410]">{t("up.popular")}</span>}
@@ -144,22 +148,31 @@ export default function UpgradePage() {
                   me?.signedIn ? (
                     <div className="btn w-full justify-center opacity-60">{t("up.included")}</div>
                   ) : (
-                    <button className="btn w-full justify-center" onClick={() => signIn("google")}>
+                    <button className="btn w-full justify-center" onClick={startSignIn}>
                       <LogIn size={15} /> {t("app.signIn")}
                     </button>
                   )
+                ) : !forSale || noPayment ? (
+                  <button className={`btn w-full justify-center ${featured || tier === "ultimate" ? "btn-gold" : ""}`} disabled>
+                    <QrCode size={15} /> {t("up.comingSoon")}
+                  </button>
                 ) : (
                   <div className="space-y-2">
-                    {(noPayment || plans?.paymentsEnabled !== false) && (
-                      <button className={`btn w-full justify-center ${featured || tier === "ultimate" ? "btn-gold" : ""}`} onClick={() => buy(tier)} disabled={loading !== null || noPayment}>
+                    {(plans === null || plans.paymentsEnabled) && (
+                      <button className={`btn w-full justify-center ${featured || tier === "ultimate" ? "btn-gold" : ""}`} onClick={() => buy(tier)} disabled={loading !== null}>
                         {loading === tier ? <Loader2 size={15} className="animate-spin" /> : <QrCode size={15} />}
-                        {noPayment ? t("up.comingSoon") : !me?.signedIn ? t("up.signInToBuy") : current === tier ? t("up.extend", { tier: info.label }) : t("up.payQris")}
+                        {!me?.signedIn ? t("up.signInToBuy") : current === tier ? t("up.extend", { tier: info.label }) : t("up.payQris")}
                       </button>
                     )}
                     {plans?.transferEnabled && (
                       <button className={`btn w-full justify-center ${plans.paymentsEnabled ? "" : featured || tier === "ultimate" ? "btn-gold" : ""}`} onClick={() => buyTransfer(tier)} disabled={loading !== null}>
                         {loading === `${tier}-transfer` ? <Loader2 size={15} className="animate-spin" /> : <Landmark size={15} />}
-                        {!me?.signedIn ? t("up.signInToBuy") : t("up.payTransfer")}
+                        {!me?.signedIn ? t("up.signInToBuy") : current === tier ? t("up.extend", { tier: info.label }) : t("up.payTransfer")}
+                      </button>
+                    )}
+                    {plans?.qrisSoon && (
+                      <button className="btn w-full justify-center" disabled>
+                        <QrCode size={15} /> {t("up.qrisSoon")}
                       </button>
                     )}
                   </div>

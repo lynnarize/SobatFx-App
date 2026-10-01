@@ -1,7 +1,7 @@
 "use client";
 
 import { Calculator, CandlestickChart, Crown, LogIn, LogOut, Menu, Newspaper, NotebookPen, Rocket, Search, Sparkles, X } from "lucide-react";
-import { signIn, signOut, useSession } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -14,6 +14,7 @@ import { AIPanel, CHAT_KEY } from "./AIPanel";
 import { FlashNumber } from "./FlashNumber";
 import { PaperEngine } from "./trade/PaperEngine";
 import { LanguageSwitch, useT } from "./i18n";
+import { useStartSignIn } from "./SignInConsent";
 import { fmtPrice, useWs } from "./workspace";
 
 const NAV = [
@@ -77,6 +78,7 @@ function Sidebar({ onClose }: { onClose(): void }) {
   const { data: session } = useSession();
   const { me, watchlist, setSymbol, symbol } = useWs();
   const { t, lang } = useT();
+  const startSignIn = useStartSignIn();
   const [q, setQ] = useState("");
   const [hideUpsell, setHideUpsell] = useState(false);
   const search = useRef<HTMLInputElement>(null);
@@ -269,10 +271,18 @@ function Sidebar({ onClose }: { onClose(): void }) {
             </button>
           </>
         ) : (
-          <button className="btn w-full justify-center" onClick={() => signIn("google")}>
+          <button className="btn w-full justify-center" onClick={startSignIn}>
             <LogIn size={15} /> {t("app.signIn")}
           </button>
         )}
+      </div>
+      <div className="flex gap-3 px-1 text-[11px] text-muted">
+        <Link href="/terms" onClick={onClose} className="hover:text-ink">
+          {t("legal.terms")}
+        </Link>
+        <Link href="/privacy" onClick={onClose} className="hover:text-ink">
+          {t("legal.privacy")}
+        </Link>
       </div>
     </nav>
   );
