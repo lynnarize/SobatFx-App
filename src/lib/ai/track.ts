@@ -36,6 +36,9 @@ export interface PlanRecord {
   /** Open time (unix s) of the candle that was forming when the plan was made. */
   t: number;
   price: number;
+  /** Candle source the plan was made on (e.g. "Binance Futures"). Venues price gold a few dollars apart,
+   *  so a plan is only scored against candles from the same source. */
+  source?: string;
   /** Market state when the plan was made. */
   feat: { rsi?: number | null; adx?: number | null; turbPct?: number | null; trend?: 1 | -1 | 0 };
   /** The AI's reply (drawing block removed), kept for the dataset export. */
@@ -117,6 +120,7 @@ export async function recordPlans(reply: string, ctx: ChatContext | undefined, t
         ...p,
         t,
         price: ctx.lastPrice,
+        source: ctx.source,
         feat: { rsi: ind.RSI14, adx: ind.ADX14, turbPct: ind.TurbulencePct, trend },
         reply: text,
       };
@@ -128,17 +132,30 @@ export async function recordPlans(reply: string, ctx: ChatContext | undefined, t
   }
 }
 
+/**
+ * Untagged gold plans predate source tags (Oct 2026). They were made and scored on Kraken XAUT — thin, gappy
+ * bars a few dollars off the gold perps used since — so they say nothing about the current feed.
+ */
+const legacyGold = (p: PlanRecord) => p.symbol === "XAUUSD" && !p.source;
+
 /** Loads an instrument's recent plans and scores any that have run their course. */
 export async function loadTrack(symbol: string, limit = 60) {
   const ids = await kv.lrange(listKey(symbol), 0, limit - 1);
-  const plans = (await kv.mget<PlanRecord>(ids.map(planKey))).filter((p): p is PlanRecord => Boolean(p));
+  const plans = (await kv.mget<PlanRecord>(ids.map(planKey))).filter((p): p is PlanRecord => Boolean(p) && !legacyGold(p!));
   const now = Date.now() / 1000;
   const open = plans.filter((p) => !p.outcome && now > p.t + intervalSec(p.interval));
   for (const iv of new Set(open.map((p) => p.interval))) {
-    const candles = await getCandles(symbol, iv).then((r) => r.candles).catch(() => null);
-    if (!candles) continue;
+    const res = await getCandles(symbol, iv).catch(() => null);
+    if (!res) continue;
     for (const p of open.filter((x) => x.interval === iv)) {
-      const outcome = resolvePlan(p, candles, intervalSec(iv), HORIZON_BARS, now);
+      // Made on another venue (the server fell back, or the feed changed): its levels don't line up with
+      // these candles. Wait for the source to return; past the horizon it can't be scored honestly.
+      const sameSource = !p.source || p.source === res.source;
+      const outcome = sameSource
+        ? resolvePlan(p, res.candles, intervalSec(iv), HORIZON_BARS, now)
+        : now > p.t + intervalSec(iv) * (HORIZON_BARS + 1)
+          ? { status: "void" as const, r: 0, at: p.t }
+          : undefined;
       if (!outcome) continue;
       p.outcome = outcome;
       await kv.set(planKey(p.id), p, { ex: TTL });
