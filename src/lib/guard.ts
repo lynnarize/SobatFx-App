@@ -11,8 +11,22 @@ import { kv } from "./store";
 //   5. one request at a time per user, and a global daily cap  (AI route)
 // The per-tier daily quota in users.ts stays the hard limit per account.
 
-/** Client IP. On Vercel the platform sets these headers itself, so a caller can't spoof them. */
+/**
+ * Forwarded headers are only believed behind a proxy that overwrites them: Vercel always does, and TRUST_PROXY=true
+ * says another one does. Otherwise any client could send its own X-Forwarded-For and get a fresh rate-limit bucket.
+ */
+const trustProxy = () => Boolean(process.env.VERCEL) || process.env.TRUST_PROXY === "true";
+let warned = false;
+
+/** Client IP for the per-IP buckets. Without a trusted proxy every caller shares one bucket (strict, never spoofable). */
 export function clientIp(req: Request) {
+  if (!trustProxy()) {
+    if (!warned && process.env.NODE_ENV === "production") {
+      warned = true;
+      console.warn("[guard] not on Vercel and TRUST_PROXY is not set: per-IP limits are shared by all visitors");
+    }
+    return "untrusted";
+  }
   return (
     req.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
     req.headers.get("x-real-ip")?.trim() ||
@@ -29,11 +43,15 @@ const hostOf = (v: string | null) => {
   }
 };
 
-/** Browser POSTs always carry Origin (or at least Referer); it must be this site. ALLOWED_ORIGINS adds more. */
+/**
+ * Browser POSTs always carry Origin (or at least Referer); it must be this site. ALLOWED_ORIGINS adds more.
+ * This stops other websites from using a visitor's session. It is not a defence against scripts, which can send any
+ * Origin they like: BotID and the rate limits handle those.
+ */
 export function isSameOrigin(req: Request) {
   const from = hostOf(req.headers.get("origin")) ?? hostOf(req.headers.get("referer"));
   if (!from) return process.env.NODE_ENV !== "production"; // curl/scripts send neither; allowed locally for testing
-  const own = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  const own = (trustProxy() && req.headers.get("x-forwarded-host")) || req.headers.get("host");
   const extra = (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => hostOf(s.trim()) ?? s.trim()).filter(Boolean);
   return from === own || extra.includes(from);
 }

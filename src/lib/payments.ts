@@ -95,7 +95,12 @@ export async function createQrisOrder(email: string, tier: PaidTier): Promise<Or
   return order;
 }
 
+/** Shape of every id newOrderId() makes. Anything else is never looked up, so request input can't pick arbitrary keys. */
+const ORDER_ID = /^SFX-[A-Z0-9-]{6,64}$/;
+export const isOrderId = (id: unknown): id is string => typeof id === "string" && ORDER_ID.test(id);
+
 export async function getOrder(id: string) {
+  if (!isOrderId(id)) return null;
   return kv.get<Order>(orderKey(id));
 }
 
@@ -103,25 +108,26 @@ export async function getOrder(id: string) {
  * Grants the plan once per order, however many webhooks, polls or admin taps race each other.
  * Paid orders are kept forever: they are the sales book (revenue.ts). The order is indexed before the grant,
  * so a sale can never be granted without being on record; a failed attempt leaves an index entry that reads skip.
+ * The lock expires, so a crash mid-way can't strand the order: the next webhook retry, poll or admin tap finishes it,
+ * and grantTier() remembers the order id, so that retry never extends the plan twice.
  */
 async function markPaid(order: Order): Promise<Order> {
-  const lock = await kv.incr(`orderlock:${order.id}`);
-  if (lock === 1) {
+  const lock = `paylock:${order.id}`;
+  if (!(await kv.lock(lock, 120))) return (await getOrder(order.id)) ?? order; // someone else is granting it right now
+  try {
+    const fresh = (await getOrder(order.id)) ?? order;
+    if (fresh.status === "paid") return fresh; // finished by a racing caller that held a stale copy
     const paidAt = Date.now();
-    try {
-      await indexSale(order.id, paidAt);
-      await grantTier(order.email, order.tier, order.days);
-    } catch (e) {
-      // Release the lock so the next webhook retry, status poll or admin tap can grant it — the user has already paid.
-      await kv.decr(`orderlock:${order.id}`).catch(() => {});
-      throw e;
-    }
-    order.status = "paid";
-    order.paidAt = paidAt;
-    await kv.set(orderKey(order.id), order);
-    await announceSale(order);
+    await indexSale(fresh.id, paidAt);
+    await grantTier(fresh.email, fresh.tier, fresh.days, fresh.id);
+    fresh.status = "paid";
+    fresh.paidAt = paidAt;
+    await kv.set(orderKey(fresh.id), fresh);
+    await announceSale(fresh);
+    return fresh;
+  } finally {
+    await kv.del(lock).catch(() => {});
   }
-  return (await getOrder(order.id)) ?? order;
 }
 
 /** Asks Midtrans for the authoritative status and applies it (idempotent). */
@@ -244,7 +250,7 @@ export async function grantManually(email: string, tier: PaidTier, days: number,
   const now = Date.now();
   const order: Order = { id: newOrderId(tier, "M"), email, tier, amount: 0, days, status: "paid", createdAt: now, paidAt: now, method: "manual", note: by };
   await indexSale(order.id, now);
-  const user = await grantTier(email, tier, days);
+  const user = await grantTier(email, tier, days, order.id);
   await kv.set(orderKey(order.id), order);
   return user;
 }

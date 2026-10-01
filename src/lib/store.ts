@@ -14,7 +14,23 @@ interface KV {
   /** Append to a list, uncapped (permanent logs). */
   rpush(key: string, value: string): Promise<void>;
   lrange(key: string, start: number, stop: number): Promise<string[]>;
+  /** SET NX with a TTL: true when this caller took the key. */
+  lock(key: string, ttlSec: number): Promise<boolean>;
+  del(key: string): Promise<void>;
+  /** Atomic compare-and-set on a `{ rev, ... }` document: writes `value` only while the stored rev (0 if none) is `baseRev`. */
+  setIfRev(key: string, baseRev: number, value: { rev: number }): Promise<boolean>;
 }
+
+// Reads the stored rev without decoding the whole document when it is written first (as `{ rev, ...data }` always is).
+const SET_IF_REV = `
+local cur = redis.call('GET', KEYS[1])
+local rev = 0
+if cur then
+  rev = tonumber(string.match(cur, '^{"rev":(%d+)[,}]') or cjson.decode(cur).rev) or 0
+end
+if rev ~= tonumber(ARGV[1]) then return 0 end
+redis.call('SET', KEYS[1], ARGV[2])
+return 1`;
 
 function redisKV(url: string, token: string): KV {
   const r = new Redis({ url, token });
@@ -37,6 +53,12 @@ function redisKV(url: string, token: string): KV {
       await r.rpush(k, v);
     },
     lrange: (k, a, b) => r.lrange<string>(k, a, b),
+    lock: async (k, ttl) => (await r.set(k, 1, { nx: true, ex: ttl })) === "OK",
+    del: async (k) => {
+      await r.del(k);
+    },
+    // Upstash JSON-encodes values on set and decodes on get, so the script stores the same JSON text.
+    setIfRev: async (k, base, v) => (await r.eval<string[], number>(SET_IF_REV, [k], [String(base), JSON.stringify(v)])) === 1,
   };
 }
 
@@ -82,6 +104,20 @@ function memoryKV(): KV {
       m.set(k, { v: [...((e?.v as string[]) ?? []), v], exp: e?.exp });
     },
     lrange: async (k, a, b) => ((live(k)?.v as string[]) ?? []).slice(a, b < 0 ? undefined : b + 1),
+    // No await between the check and the write, so these are atomic within the process.
+    lock: async (k, ttl) => {
+      if (live(k)) return false;
+      m.set(k, { v: 1, exp: Date.now() + ttl * 1000 });
+      return true;
+    },
+    del: async (k) => {
+      m.delete(k);
+    },
+    setIfRev: async (k, base, v) => {
+      if (Number((live(k)?.v as { rev?: number } | undefined)?.rev ?? 0) !== base) return false;
+      m.set(k, { v });
+      return true;
+    },
   };
 }
 

@@ -8,6 +8,8 @@ export interface UserRecord {
   createdAt: number;
   proUntil?: number;
   ultimateUntil?: number;
+  /** Recent order ids already granted, so a retried grant never extends the plan twice. */
+  grants?: string[];
 }
 
 const userKey = (email: string) => `user:${email.toLowerCase()}`;
@@ -47,12 +49,14 @@ export function effectiveTier(u: UserRecord | null): { tier: Tier; until?: numbe
   return { tier: "free" };
 }
 
-/** Extends the tier from max(now, current expiry). */
-export async function grantTier(email: string, tier: PaidTier, days: number) {
+/** Extends the tier from max(now, current expiry). With `orderId`, once per order: the extension and the id are saved together. */
+export async function grantTier(email: string, tier: PaidTier, days: number, orderId?: string) {
   const u = (await getUser(email)) ?? (await upsertUser({ email }));
+  if (orderId && u.grants?.includes(orderId)) return u;
   const field = tier === "ultimate" ? "ultimateUntil" : "proUntil";
   const from = Math.max(Date.now(), u[field] ?? 0);
   u[field] = from + days * 86_400_000;
+  if (orderId) u.grants = [...(u.grants ?? []), orderId].slice(-50);
   await kv.set(userKey(email), u);
   return u;
 }

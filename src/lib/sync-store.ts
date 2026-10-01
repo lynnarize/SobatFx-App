@@ -42,14 +42,12 @@ export async function loadDoc(email: string): Promise<SyncDoc> {
 }
 
 /**
- * Saves `data` when the caller started from the current revision. Returns the stored document, or the newer
- * server copy (`conflict`) for the caller to merge with. Redis has no compare-and-set here, so two saves in the
- * same instant could both pass; the next sync then merges them.
+ * Saves `data` when the caller started from the current revision. Returns the new revision, or the newer server
+ * copy (`conflict`) for the caller to merge with. The check and the write are one atomic step, so of two devices
+ * saving from the same revision exactly one wins and the other gets the conflict.
  */
 export async function saveDoc(email: string, baseRev: number, data: SyncData): Promise<{ ok: true; rev: number } | { ok: false; current: SyncDoc }> {
-  const current = await loadDoc(email);
-  if (current.rev !== baseRev) return { ok: false, current };
-  const rev = current.rev + 1;
-  await kv.set(docKey(email), { rev, ...data });
-  return { ok: true, rev };
+  const rev = baseRev + 1;
+  if (await kv.setIfRev(docKey(email), baseRev, { rev, ...data })) return { ok: true, rev };
+  return { ok: false, current: await loadDoc(email) };
 }

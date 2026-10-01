@@ -16,7 +16,8 @@ import { createQrisOrder, createTransferOrder, displayStatus, getOrder, syncOrde
 import { indexSale, monthOf, salesCsv, salesFor, summarize } from "../src/lib/revenue";
 import { handleUpdate, notifyClaim, parseGrant, type Update } from "../src/lib/telegram-bot";
 import { validWebhookSecret } from "../src/lib/telegram";
-import { effectiveTier, getUser } from "../src/lib/users";
+import { effectiveTier, getUser, grantTier } from "../src/lib/users";
+import { kv } from "../src/lib/store";
 import { pipValueUsd, positionSize, DEFAULT_RISK } from "../src/lib/market/risk";
 import { type Candle, getInstrument } from "../src/lib/market/symbols";
 
@@ -580,9 +581,18 @@ const atest = async (name: string, fn: () => Promise<void>) => {
 };
 const post = (headers: Record<string, string>, body = "{}") => new Request("https://sobatfx.test/api/ai/chat", { method: "POST", headers: { host: "sobatfx.test", ...headers }, body });
 
-test("client IP prefers the platform header over a spoofable X-Forwarded-For", () => {
-  assert.equal(clientIp(post({ "x-vercel-forwarded-for": "1.1.1.1", "x-forwarded-for": "6.6.6.6" })), "1.1.1.1");
-  assert.equal(clientIp(post({})), "unknown");
+test("client IP: forwarded headers only behind a trusted proxy, platform header first", () => {
+  const env = process.env as Record<string, string | undefined>;
+  const vercel = env.VERCEL;
+  try {
+    delete env.VERCEL;
+    assert.equal(clientIp(post({ "x-forwarded-for": "6.6.6.6" })), "untrusted", "off Vercel a forged X-Forwarded-For gets no bucket of its own");
+    env.VERCEL = "1";
+    assert.equal(clientIp(post({ "x-vercel-forwarded-for": "1.1.1.1", "x-forwarded-for": "6.6.6.6" })), "1.1.1.1");
+    assert.equal(clientIp(post({})), "unknown");
+  } finally {
+    env.VERCEL = vercel;
+  }
 });
 test("same-origin check: own site passes, other sites fail, missing Origin fails in production", () => {
   const prod = process.env.NODE_ENV;
@@ -623,6 +633,8 @@ void (async () => {
     const stale = await saveDoc(mail, 0, emptyData());
     assert.ok(!stale.ok && stale.current.rev === 1 && stale.current.drawings.XAUUSD.length === 1, "a device that missed rev 1 can't overwrite it");
     assert.deepEqual(await saveDoc(mail, 1, emptyData()), { ok: true, rev: 2 });
+    const race = await Promise.all([saveDoc(mail, 2, mine), saveDoc(mail, 2, emptyData())]);
+    assert.equal(race.filter((r) => r.ok).length, 1, "two devices saving from the same revision: exactly one wins, the other must merge");
     assert.ok(syncDataSchema.safeParse(mine).success);
     assert.ok(!syncDataSchema.safeParse({ ...mine, paper: { startBalance: 1, trades: [{ id: "x" }] } }).success, "malformed trades are rejected");
     assert.ok(!syncDataSchema.safeParse({ drawings: { XAUUSD: [{ price: 1 }] }, paper: mine.paper }).success, "drawings need an id and a type");
@@ -644,6 +656,19 @@ void (async () => {
     const again = await acquireSlot(email);
     assert.ok(again);
     assert.equal(await acquireSlot(email), null);
+  });
+  await atest("payments: grants are once per order, the pay lock is exclusive and expires, odd ids are never looked up", async () => {
+    const mail = `grant-${Date.now()}@test.com`;
+    const once = (await grantTier(mail, "pro", 30, "SFX-PRO-TEST-1")).proUntil!;
+    assert.equal((await grantTier(mail, "pro", 30, "SFX-PRO-TEST-1")).proUntil, once, "a retried grant for the same order doesn't extend again");
+    assert.equal((await grantTier(mail, "pro", 30, "SFX-PRO-TEST-2")).proUntil, once + 30 * 86_400_000);
+    const k = `paylock:test-${Date.now()}`;
+    assert.ok(await kv.lock(k, 1));
+    assert.ok(!(await kv.lock(k, 1)), "held");
+    await new Promise((r) => setTimeout(r, 1100));
+    assert.ok(await kv.lock(k, 1), "a crashed holder's lock runs out");
+    assert.equal(await getOrder("../user:someone"), null);
+    assert.equal(await getOrder("x".repeat(500)), null);
   });
   await atest("body reader stops at the size cap, and rejects bad JSON", async () => {
     assert.deepEqual(await readJson(post({}, JSON.stringify({ a: 1 })), 100), { ok: true, data: { a: 1 } });
