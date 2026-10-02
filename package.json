@@ -1,6 +1,6 @@
 {
   "name": "sobatfx-app",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "tsx scripts/selftest.ts",
+    "release": "npm version patch -m \"v%s\"",
     "eval:ai": "tsx --env-file=.env.local scripts/eval-ai.ts",
     "eval:trade": "tsx --env-file=.env.local scripts/eval-trade.ts",
     "telegram:webhook": "tsx --env-file=.env.local scripts/telegram-webhook.ts",

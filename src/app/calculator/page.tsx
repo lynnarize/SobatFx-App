@@ -4,9 +4,10 @@ import { PenLine, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useT } from "@/components/i18n";
+import { LiveRate } from "@/components/LiveRate";
 import { fmtPrice, useNow, useWs } from "@/components/workspace";
 import { uid } from "@/lib/drawings";
-import { fmtMoney, pipValueUsd, positionSize } from "@/lib/market/risk";
+import { fmtMoney, pipValueUsd, positionSize, withCurrency } from "@/lib/market/risk";
 import { INSTRUMENTS, getInstrument, intervalSec } from "@/lib/market/symbols";
 
 export default function CalculatorPage() {
@@ -59,7 +60,7 @@ export default function CalculatorPage() {
         <div className="card space-y-5 p-5">
           <div className="grid gap-4 @lg:grid-cols-3">
             <Field label={t("calc.currency")}>
-              <select className="field" value={risk.currency} onChange={(e) => setRisk({ currency: e.target.value as "USD" | "IDR" })}>
+              <select className="field" value={risk.currency} onChange={(e) => setRisk(withCurrency(risk, e.target.value as "USD" | "IDR"))}>
                 <option value="USD">USD ($)</option>
                 <option value="IDR">IDR (Rp)</option>
               </select>
@@ -69,7 +70,7 @@ export default function CalculatorPage() {
             </Field>
             {risk.currency === "IDR" && (
               <Field label={t("calc.usdIdr")}>
-                <input className="field num" type="number" value={risk.usdIdr} onChange={(e) => setRisk({ usdIdr: +e.target.value })} />
+                <LiveRate />
               </Field>
             )}
           </div>

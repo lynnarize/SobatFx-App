@@ -1,6 +1,6 @@
 "use client";
 
-import { Calculator, CandlestickChart, Crown, LogIn, LogOut, Menu, Newspaper, NotebookPen, Rocket, Search, Sparkles, X } from "lucide-react";
+import { Calculator, CandlestickChart, Crown, LogIn, LogOut, Menu, Newspaper, NotebookPen, Rocket, Search, Settings, Sparkles, X } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
@@ -10,10 +10,13 @@ import { subscribePrice } from "@/lib/market/live";
 import { INSTRUMENTS } from "@/lib/market/symbols";
 import { TIER_INFO } from "@/lib/tiers";
 import { instrumentName } from "@/lib/i18n";
-import { AIPanel, CHAT_KEY } from "./AIPanel";
+import { clearHistory } from "@/lib/chat-history";
+import { AIPanel } from "./AIPanel";
 import { FlashNumber } from "./FlashNumber";
 import { PaperEngine } from "./trade/PaperEngine";
 import { LanguageSwitch, useT } from "./i18n";
+import { Onboarding } from "./onboarding/Onboarding";
+import { SettingsDialog, openSettings } from "./settings/SettingsDialog";
 import { useStartSignIn } from "./SignInConsent";
 import { fmtPrice, useWs } from "./workspace";
 
@@ -47,7 +50,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
           <Image src="/mark.jpg" alt="" width={28} height={28} className="rounded-md" />
           <span className="font-semibold">SobatFX</span>
-          <LanguageSwitch className="ml-auto" />
+          <button className="icon-btn ml-auto h-8 w-8" aria-label={t("nav.settings")} title={t("nav.settings")} onClick={() => openSettings()}>
+            <Settings size={15} />
+          </button>
+          <LanguageSwitch />
         </div>
         <main className="@container min-h-0 flex-1 overflow-y-auto">
           {/* Keyed by route so each page fades up on navigation. */}
@@ -59,6 +65,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* AI panel */}
       <PaperEngine />
+      <Onboarding />
+      <SettingsDialog />
       {/* Always mounted (only hidden when closed) so the conversation and any in-flight reply survive closing. */}
       <div className={`slide-panel fixed inset-0 z-50 sm:inset-y-0 sm:left-auto sm:w-[420px] xl:static xl:z-auto xl:w-[400px] xl:shrink-0 ${aiOpen ? "" : "hidden"}`} aria-hidden={!aiOpen}>
         <AIPanel />
@@ -239,8 +247,16 @@ function Sidebar({ onClose }: { onClose(): void }) {
         </div>
       )}
 
-      <div className="flex items-center justify-between px-1">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">{t("app.language")}</span>
+      <div className="flex items-center justify-between gap-2">
+        <button
+          onClick={() => {
+            onClose();
+            openSettings();
+          }}
+          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-ink-2 transition hover:bg-panel-2 hover:text-ink"
+        >
+          <Settings size={16} /> {t("nav.settings")}
+        </button>
         <LanguageSwitch />
       </div>
 
@@ -262,9 +278,7 @@ function Sidebar({ onClose }: { onClose(): void }) {
               <div className={`text-[11px] ${tier === "free" ? "text-muted" : "text-gold"}`}>{t("app.plan", { tier: TIER_INFO[tier].label })}</div>
             </div>
             <button className="icon-btn h-8 w-8" aria-label={t("app.signOut")} title={t("app.signOut")} onClick={() => {
-                try {
-                  localStorage.removeItem(CHAT_KEY);
-                } catch {}
+                clearHistory();
                 signOut();
               }}>
               <LogOut size={14} />

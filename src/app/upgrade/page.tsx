@@ -112,8 +112,8 @@ export default function UpgradePage() {
           const featured = tier === "pro";
           const forSale = !plans?.saleTiers || plans.saleTiers.includes(tier as PaidTier);
           return (
-            <div key={tier} className={`card relative flex flex-col p-6 ${featured ? "border-gold-deep/60" : ""} ${tier === "ultimate" ? "bg-gradient-to-b from-[#1d1a14] to-panel-2" : ""}`}>
-              {featured && <span className="absolute -top-2.5 left-6 rounded-full bg-gold px-2.5 py-0.5 text-[11px] font-semibold text-[#171410]">{t("up.popular")}</span>}
+            <div key={tier} className={`card relative flex flex-col p-6 ${featured ? "border-gold-deep/60" : ""} ${tier === "ultimate" ? "bg-gradient-to-b from-gold-soft to-panel-2" : ""}`}>
+              {featured && <span className="absolute -top-2.5 left-6 rounded-full bg-gold px-2.5 py-0.5 text-[11px] font-semibold text-on-gold">{t("up.popular")}</span>}
               {p?.listPriceUsd ? <span className="absolute -top-2.5 right-6 rounded-full bg-down px-2.5 py-0.5 text-[11px] font-semibold text-white">{t("up.discount")}</span> : null}
               <div className="flex items-center gap-2">
                 <h2 className="text-lg font-semibold">{info.label}</h2>

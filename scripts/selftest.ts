@@ -18,7 +18,8 @@ import { handleUpdate, notifyClaim, parseGrant, type Update } from "../src/lib/t
 import { validWebhookSecret } from "../src/lib/telegram";
 import { effectiveTier, getUser, grantTier } from "../src/lib/users";
 import { kv } from "../src/lib/store";
-import { pipValueUsd, positionSize, DEFAULT_RISK } from "../src/lib/market/risk";
+import { pipValueUsd, positionSize, withCurrency, DEFAULT_RISK } from "../src/lib/market/risk";
+import { daysLeft, prune, slim, titleFrom, upsert } from "../src/lib/chat-history";
 import { type Candle, getInstrument } from "../src/lib/market/symbols";
 
 const test = (name: string, fn: () => void) => {
@@ -38,6 +39,36 @@ test("EUR/USD lot: $1000, 1%, 20 pips → 0.05", () => assert.equal(positionSize
 test("XAU/USD lot: $1000, 1%, $5 SL → 0.02", () => assert.equal(positionSize(inst("XAUUSD"), usd, 4200, 4195, 4210)!.lot, 0.02));
 test("XAU/USD pip value = $10/lot", () => assert.equal(pipValueUsd(inst("XAUUSD"), 4200), 10));
 test("USD/JPY pip value @150 ≈ $6.67", () => assert.equal(pipValueUsd(inst("USDJPY"), 150).toFixed(2), "6.67"));
+test("currency switch converts the balance both ways", () => {
+  const idr = withCurrency({ ...usd, usdIdr: 16500 }, "IDR");
+  assert.deepEqual(idr, { currency: "IDR", balance: 16_500_000 });
+  assert.deepEqual(withCurrency({ ...usd, currency: "IDR", balance: 16_500_000, usdIdr: 16500 }, "USD"), { currency: "USD", balance: 1000 });
+  assert.deepEqual(withCurrency(usd, "USD"), { currency: "USD" });
+});
+test("chat history: create on first message, newest first, 7-day expiry", () => {
+  const day = 86_400_000;
+  type M = { role: "user" | "assistant"; content: string; image?: string };
+  let h = upsert<M>([], "a", () => [], 0);
+  assert.equal(h.length, 0, "an empty chat is not saved");
+  h = upsert<M>(h, "a", (m) => [...m, { role: "user", content: "Analisa   XAU/USD\nsekarang" }], 0);
+  h = upsert<M>(h, "b", (m) => [...m, { role: "user", content: "x".repeat(80) }], day);
+  assert.deepEqual(h.map((c) => c.id), ["b", "a"]);
+  assert.equal(h[1].title, "Analisa XAU/USD sekarang");
+  assert.ok(titleFrom("x".repeat(80)).length <= 60);
+  h = upsert<M>(h, "a", (m) => [...m, { role: "assistant", content: "ok" }], 2 * day);
+  assert.equal(h[0].id, "a");
+  assert.equal(h[0].createdAt, 0);
+  assert.deepEqual(prune(h, 8 * day + 1).map((c) => c.id), ["a"], "b expired 7 days after its last message");
+  assert.equal(daysLeft(h[0], 2 * day), 7);
+  assert.equal(daysLeft(h[0], 8.5 * day), 1);
+});
+test("chat history: only the newest images are stored", () => {
+  type M = { role: "user" | "assistant"; content: string; image?: string };
+  const msgs: M[] = Array.from({ length: 10 }, (_, i) => ({ role: "user", content: `q${i}`, image: "data:x" }));
+  const out = slim<M>([{ id: "a", title: "", createdAt: 0, updatedAt: 0, msgs }], 0, 3);
+  assert.equal(out[0].msgs.filter((m) => m.image).length, 3);
+  assert.ok(out[0].msgs.at(-1)!.image, "the latest keeps its image");
+});
 test("GBP/JPY uses USDJPY rate", () => assert.equal(pipValueUsd(inst("GBPJPY"), 200, { USDJPY: 150 }).toFixed(2), "6.67"));
 test("only analysis/drawing requests replace the AI's drawings", () => {
   for (const yes of [

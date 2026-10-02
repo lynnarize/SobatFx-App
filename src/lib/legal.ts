@@ -5,7 +5,7 @@ import type { Lang } from "./i18n";
 // ai/providers.ts), update both copies and bump PRIVACY_UPDATED.
 // Terms: keep them in step with the plans, limits and payment methods (tiers.ts, payments.ts) and bump TERMS_UPDATED.
 
-export const PRIVACY_UPDATED = "2026-10-01";
+export const PRIVACY_UPDATED = "2026-10-02";
 export const TERMS_UPDATED = "2026-10-01";
 
 export interface LegalSection {
@@ -46,7 +46,7 @@ const en: LegalDoc = {
       ul: [
         "Account: email, name, profile picture URL, the date the account was created, and the expiry date of any paid plan.",
         "Synced data: chart drawings and your demo trade history, saved against your account so they follow you across devices.",
-        "AI chat: the messages you send, the chart context (symbol, timeframe, recent candles, indicators) and any chart image or screenshot you attach are sent to our AI providers to produce a reply. Your conversation is kept in your own browser and is removed when you sign out. We do not keep it in your account.",
+        "AI chat: the messages you send, the chart context (symbol, timeframe, recent candles, indicators) and any chart image or screenshot you attach are sent to our AI providers to produce a reply. Your conversations are kept as chat history in your own browser only. Each one is deleted automatically 7 days after its last message, and all of them when you sign out. You can also delete them yourself in the chat history or in Settings. We do not keep them in your account.",
         "Orders and payments: order id, plan, amount, status and timestamps, linked to your email. We never receive or store card numbers or e-wallet credentials; payments are processed by our payment provider.",
         "Bank transfer proof: if you pay by bank transfer and send a photo of the receipt through our Telegram bot, the photo and your Telegram chat id are used by us to confirm the payment.",
         "AI trade plans: when the AI draws a trade plan, we record the instrument, levels, market state and the AI's reply, then score it against later prices to measure accuracy. These records are not linked to your email or name.",
@@ -57,8 +57,8 @@ const en: LegalDoc = {
       h: "3. Cookies and browser storage",
       ul: [
         "Sign-in session cookie (set by NextAuth) keeps you signed in. It is strictly necessary.",
-        "Language cookie (sfx_lang) remembers Bahasa Indonesia or English.",
-        "Local storage in your browser holds your watchlist, settings, drawings, demo trades and recent AI conversation. You can clear it from your browser settings.",
+        "Language cookie (sfx_lang) remembers Bahasa Indonesia or English, and the theme cookie (sfx_theme) remembers dark, light or system mode.",
+        "Local storage in your browser holds your watchlist, settings (such as currency), drawings, demo trades and your AI chat history (deleted automatically after 7 days). You can clear it from your browser settings.",
         "We do not use advertising or cross-site tracking cookies.",
       ],
     },
@@ -90,7 +90,7 @@ const en: LegalDoc = {
       h: "6. Your choices and rights",
       p: [
         "You may ask us to access, correct, export or delete your data, and to close your account. Deleting an account also removes your synced drawings and trade history. Some order records may be retained where we have a legal duty to.",
-        "You can sign out at any time, which clears the AI conversation stored in your browser, and revoke Google access from your Google account.",
+        "You can sign out at any time, which clears the AI chat history stored in your browser, and revoke Google access from your Google account.",
       ],
     },
     {
@@ -135,7 +135,7 @@ const id: LegalDoc = {
       ul: [
         "Akun: email, nama, URL foto profil, tanggal akun dibuat, dan tanggal berakhirnya paket berbayar.",
         "Data sinkronisasi: gambar di chart dan riwayat demo trade, disimpan pada akun Anda agar ikut ke perangkat lain.",
-        "Chat AI: pesan yang Anda kirim, konteks chart (simbol, timeframe, candle terbaru, indikator), dan gambar chart atau screenshot yang Anda lampirkan dikirim ke penyedia AI kami untuk menghasilkan jawaban. Percakapan disimpan di browser Anda sendiri dan dihapus saat Anda keluar. Kami tidak menyimpannya di akun Anda.",
+        "Chat AI: pesan yang Anda kirim, konteks chart (simbol, timeframe, candle terbaru, indikator), dan gambar chart atau screenshot yang Anda lampirkan dikirim ke penyedia AI kami untuk menghasilkan jawaban. Percakapan disimpan sebagai riwayat chat hanya di browser Anda sendiri. Setiap percakapan dihapus otomatis 7 hari setelah pesan terakhirnya, dan semuanya dihapus saat Anda keluar. Anda juga dapat menghapusnya sendiri di riwayat chat atau di Pengaturan. Kami tidak menyimpannya di akun Anda.",
         "Pesanan dan pembayaran: id pesanan, paket, nominal, status, dan waktu, terkait dengan email Anda. Kami tidak pernah menerima atau menyimpan nomor kartu maupun kredensial dompet digital; pembayaran diproses oleh penyedia pembayaran kami.",
         "Bukti transfer bank: jika Anda membayar lewat transfer bank dan mengirim foto bukti melalui bot Telegram kami, foto dan id chat Telegram Anda kami gunakan untuk memastikan pembayaran.",
         "Rencana trade AI: saat AI menggambar rencana trade, kami mencatat instrumen, level, kondisi pasar, dan jawaban AI, lalu menilainya terhadap harga berikutnya untuk mengukur akurasi. Catatan ini tidak terhubung ke email atau nama Anda.",
@@ -146,8 +146,8 @@ const id: LegalDoc = {
       h: "3. Cookie dan penyimpanan browser",
       ul: [
         "Cookie sesi login (diatur oleh NextAuth) menjaga Anda tetap masuk. Ini mutlak diperlukan.",
-        "Cookie bahasa (sfx_lang) mengingat pilihan Bahasa Indonesia atau English.",
-        "Penyimpanan lokal di browser berisi watchlist, pengaturan, gambar chart, demo trade, dan percakapan AI terakhir. Anda dapat menghapusnya lewat pengaturan browser.",
+        "Cookie bahasa (sfx_lang) mengingat pilihan Bahasa Indonesia atau English, dan cookie tema (sfx_theme) mengingat mode gelap, terang, atau sistem.",
+        "Penyimpanan lokal di browser berisi watchlist, pengaturan (seperti mata uang), gambar chart, demo trade, dan riwayat chat AI (dihapus otomatis setelah 7 hari). Anda dapat menghapusnya lewat pengaturan browser.",
         "Kami tidak memakai cookie iklan atau pelacakan lintas situs.",
       ],
     },
@@ -179,7 +179,7 @@ const id: LegalDoc = {
       h: "6. Pilihan dan hak Anda",
       p: [
         "Anda dapat meminta akses, koreksi, ekspor, atau penghapusan data Anda, serta penutupan akun. Menghapus akun juga menghapus gambar chart dan riwayat trade yang tersinkron. Sebagian catatan pesanan dapat tetap disimpan bila kami berkewajiban secara hukum.",
-        "Anda dapat keluar kapan saja, yang akan menghapus percakapan AI di browser Anda, dan mencabut akses Google dari akun Google Anda.",
+        "Anda dapat keluar kapan saja, yang akan menghapus riwayat chat AI di browser Anda, dan mencabut akses Google dari akun Google Anda.",
       ],
     },
     {

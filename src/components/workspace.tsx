@@ -6,6 +6,7 @@ import { type Drawing, uid } from "@/lib/drawings";
 import { type CloseReason, DEFAULT_PAPER, type PaperAccount, type PaperTrade, closeTrade, fillTrade } from "@/lib/paper";
 import { DEFAULT_RISK, type RiskSettings } from "@/lib/market/risk";
 import { type Candle, DEFAULT_WATCHLIST, type Interval, type SourceNote, getInstrument } from "@/lib/market/symbols";
+import type { UsdIdrQuote } from "@/lib/fx";
 import type { SyncData } from "@/lib/sync";
 import type { Tier } from "@/lib/tiers";
 import { SignInConsentProvider } from "./SignInConsent";
@@ -47,6 +48,8 @@ interface Ws {
   risk: RiskSettings;
   setRisk(r: Partial<RiskSettings>): void;
   rates: Record<string, number>;
+  /** Live USD→IDR quote; its rate is also copied into risk.usdIdr. */
+  usdIdr: UsdIdrQuote | null;
   chart: React.RefObject<ChartHandle | null>;
   registerChart(h: ChartHandle | null): void;
   aiOpen: boolean;
@@ -194,6 +197,27 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(t);
   }, []);
 
+  // Live USD→IDR rate for IDR accounts: refreshed every 5 minutes and when the tab regains focus.
+  const [usdIdr, setUsdIdr] = useState<UsdIdrQuote | null>(null);
+  useEffect(() => {
+    const load = () =>
+      fetch("/api/fx")
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((q: UsdIdrQuote) => {
+          setUsdIdr(q);
+          if (q.live) setRiskRaw((x) => (x.usdIdr === q.rate ? x : { ...x, usdIdr: q.rate }));
+        })
+        .catch(() => {});
+    load();
+    const t = window.setInterval(load, 300_000);
+    const onFocus = () => document.visibilityState === "visible" && load();
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [setRiskRaw]);
+
   const askAI = useCallback((prompt: string, opts?: { withChart?: boolean }) => {
     setAiOpen(true);
     setPendingAsk((p) => ({ prompt, withChart: opts?.withChart ?? true, n: (p?.n ?? 0) + 1 }));
@@ -215,6 +239,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     risk,
     setRisk: (r) => setRiskRaw((x) => ({ ...x, ...r })),
     rates,
+    usdIdr,
     chart,
     registerChart: useCallback((h: ChartHandle | null) => {
       chart.current = h;

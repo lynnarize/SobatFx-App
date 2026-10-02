@@ -11,6 +11,13 @@ export interface RiskSettings {
 
 export const DEFAULT_RISK: RiskSettings = { balance: 1000, riskPct: 1, currency: "USD", usdIdr: 16500 };
 
+/** Changing the account currency converts the balance at the USD/IDR rate, so the money at risk stays the same. */
+export function withCurrency(s: RiskSettings, currency: RiskSettings["currency"]): Partial<RiskSettings> {
+  if (currency === s.currency || !(s.usdIdr > 0)) return { currency };
+  const balance = currency === "IDR" ? Math.round(s.balance * s.usdIdr) : Math.round((s.balance / s.usdIdr) * 100) / 100;
+  return { currency, balance };
+}
+
 /**
  * Value of 1 pip for 1.00 lot, in USD.
  * `rates` supplies USD conversion for crosses, e.g. { USDJPY: 150.2, GBPUSD: 1.27 }.

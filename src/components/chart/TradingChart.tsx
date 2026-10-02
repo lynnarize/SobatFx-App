@@ -42,7 +42,9 @@ import { type Candle, getInstrument, intervalSec } from "@/lib/market/symbols";
 import { kindKey } from "@/lib/paper";
 import type { DrawingTool, MagnetMode } from "@/lib/opencharts/constants";
 import { DrawingToolsManager } from "@/lib/opencharts/drawing-tools/manager";
+import { CHART_THEME } from "@/lib/theme";
 import { useT } from "../i18n";
+import { useTheme } from "../theme";
 import { useWs } from "../workspace";
 import { SelectedPanel } from "./SelectedPanel";
 import { useTradeLevels } from "./useTradeLevels";
@@ -89,6 +91,7 @@ export function TradingChart() {
     () => venueOf(inst),
   );
   const { t, locale } = useT();
+  const { theme } = useTheme();
 
   const box = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -147,10 +150,9 @@ export function TradingChart() {
     const el = box.current!;
     const chart = createChart(el, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: "#111113" }, textColor: "#858077", fontFamily: "var(--font-geist-mono), ui-monospace, monospace", attributionLogo: true },
-      grid: { vertLines: { color: "rgba(244,241,234,0.04)" }, horzLines: { color: "rgba(244,241,234,0.04)" } },
-      rightPriceScale: { borderColor: "rgba(244,241,234,0.08)" },
-      timeScale: { borderColor: "rgba(244,241,234,0.08)", timeVisible: true, rightOffset: 8 },
+      // Colours are set by the theme effect below.
+      layout: { fontFamily: "var(--font-geist-mono), ui-monospace, monospace", attributionLogo: true },
+      timeScale: { timeVisible: true, rightOffset: 8 },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: "rgba(212,182,124,0.4)", labelBackgroundColor: "#b8944f" }, horzLine: { color: "rgba(212,182,124,0.4)", labelBackgroundColor: "#b8944f" } },
       localization: { timeFormatter: (t: number) => new Date(t * 1000).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) },
     });
@@ -254,6 +256,17 @@ export function TradingChart() {
       localization: { locale, timeFormatter: (ts: number) => new Date(ts * 1000).toLocaleString(locale, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) },
     });
   }, [locale]);
+
+  // Canvas colours follow the app theme (the chart can't read CSS variables).
+  useEffect(() => {
+    const c = CHART_THEME[theme];
+    chartRef.current?.applyOptions({
+      layout: { background: { type: ColorType.Solid, color: c.bg }, textColor: c.text },
+      grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },
+      rightPriceScale: { borderColor: c.border },
+      timeScale: { borderColor: c.border },
+    });
+  }, [theme]);
 
   useEffect(() => {
     emaRefs.current.forEach((s) => s.applyOptions({ visible: showEma }));

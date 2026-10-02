@@ -1,12 +1,13 @@
 "use client";
 
-import { AlertTriangle, ArrowUp, Calculator, Camera, ImagePlus, Lock, Crown, Eraser, ImageOff, LogIn, PenLine, RotateCcw, Sparkles, Square, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Calculator, Camera, Clock, History, ImagePlus, Lock, Crown, Eraser, ImageOff, LogIn, MessagesSquare, PenLine, SquarePen, Sparkles, Square, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type Conversation, HISTORY_CLEARED_EVENT, HISTORY_TTL_DAYS, clearHistory, dayGroup, daysLeft, loadHistory, prune, saveHistory, upsert } from "@/lib/chat-history";
 import { extractAnnotations, prepareUpload } from "@/lib/annotate";
 import { journalForAI } from "@/lib/paper";
-import { MIN_RR, type Drawing, type RejectedPlan, asksForDrawing, describeDrawings, extractDrawings } from "@/lib/drawings";
+import { MIN_RR, type Drawing, type RejectedPlan, asksForDrawing, describeDrawings, extractDrawings, uid } from "@/lib/drawings";
 import { AnnotatedImage } from "./AnnotatedImage";
 import { checkPlans, type PlanCheck } from "@/lib/ai/lot-check";
 import { adx, atr, bollinger, ema, macd, rsi, swings, turbulence } from "@/lib/market/indicators";
@@ -40,8 +41,6 @@ interface Msg {
 
 const ERR = "\u0000ERR:";
 const END = "\u0000END";
-/** Conversation is kept on this device until "New chat" or sign-out. */
-export const CHAT_KEY = "sfx.chat";
 
 // Label/prompt keys: q.<id> and q.<id>Prompt in src/lib/i18n.ts
 const QUICK = [
@@ -58,18 +57,33 @@ export function AIPanel() {
   const pathname = usePathname();
   const { t } = useT();
   const startSignIn = useStartSignIn();
-  const [msgs, setMsgs] = useState<Msg[]>([]);
-  // State, not a ref: saving starts only on the render that already holds the restored chat,
+  // Chat history on this device (src/lib/chat-history.ts); the open conversation is `chatId`.
+  const [history, setHistory] = useState<Conversation<Msg>[]>([]);
+  const [chatId, setChatId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const msgs = useMemo(() => history.find((c) => c.id === chatId)?.msgs ?? [], [history, chatId]);
+  /** Edits one conversation by id, so a reply still streaming lands in its own chat. */
+  const editChat = useCallback((id: string, fn: (m: Msg[]) => Msg[]) => {
+    const now = Date.now();
+    setHistory((h) => upsert(h, id, fn, now));
+  }, []);
+  // State, not a ref: saving starts only on the render that already holds the restored history,
   // otherwise React's dev double-effect run saves [] over it first.
   const [restored, setRestored] = useState(false);
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- load browser-only state after mount */
-    try {
-      const saved = localStorage.getItem(CHAT_KEY);
-      if (saved) setMsgs(JSON.parse(saved));
-    } catch {}
+    const saved = loadHistory<Msg>(Date.now());
+    setHistory(saved);
+    // Reopen the latest conversation, as before history existed.
+    setChatId(saved[0]?.id ?? null);
     setRestored(true);
     /* eslint-enable react-hooks/set-state-in-effect */
+    const onCleared = () => {
+      setHistory([]);
+      setChatId(null);
+    };
+    window.addEventListener(HISTORY_CLEARED_EVENT, onCleared);
+    return () => window.removeEventListener(HISTORY_CLEARED_EVENT, onCleared);
   }, []);
   const [input, setInput] = useState("");
   const [upload, setUpload] = useState<string | null>(null);
@@ -92,21 +106,11 @@ export function AIPanel() {
   const onChart = pathname === "/";
 
   useEffect(() => {
-    try {
-      if (restored) {
-        const kept = msgs.filter((m) => m.content).slice(-40);
-        let imgs = 0;
-        // Images are large: keep them only on the 4 most recent messages that have one.
-        const slim = kept
-          .slice()
-          .reverse()
-          .map((m) => (m.image && ++imgs > 4 ? { ...m, image: undefined } : m))
-          .reverse();
-        localStorage.setItem(CHAT_KEY, JSON.stringify(slim));
-      }
-    } catch {}
+    if (restored) saveHistory(history, Date.now());
+  }, [history, restored]);
+  useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
-  }, [msgs, restored]);
+  }, [msgs]);
 
   const buildContext = useCallback(() => {
     const inst = getInstrument(symbol)!;
@@ -152,6 +156,9 @@ export function AIPanel() {
     async (prompt: string, withChart: boolean, upload?: string | null) => {
       const text = prompt.trim() || (upload ? t("ai.uploadPrompt") : "");
       if (!text || busy) return;
+      const cid = chatId ?? uid();
+      if (!chatId) setChatId(cid);
+      const setMsgs = (fn: (m: Msg[]) => Msg[]) => editChat(cid, fn);
       if (!me?.signedIn) {
         setMsgs((m) => [...m, { role: "user", content: text }, { role: "assistant", content: t("ai.needSignIn"), error: "auth" }]);
         return;
@@ -229,7 +236,7 @@ export function AIPanel() {
         refreshMe();
       }
     },
-    [busy, me, msgs, onChart, ws.chart, buildContext, candles, interval, drawings, setDrawings, refreshMe, t, symbol, risk, rates],
+    [busy, me, msgs, chatId, editChat, onChart, ws.chart, buildContext, candles, interval, drawings, setDrawings, refreshMe, t, symbol, risk, rates],
   );
 
   // Requests coming from other parts of the app ("Ask AI" buttons).
@@ -270,9 +277,32 @@ export function AIPanel() {
           </div>
         </div>
         <div className="ml-auto flex gap-1">
-          {msgs.length > 0 && (
-            <button className="icon-btn h-8 w-8" title={t("ai.newChat")} aria-label={t("ai.newChat")} onClick={() => setMsgs([])} disabled={busy}>
-              <RotateCcw size={14} />
+          <button
+            className="icon-btn h-8 w-8"
+            title={t("hist.title")}
+            aria-label={t("hist.title")}
+            aria-pressed={showHistory}
+            onClick={() => {
+              // Drop chats that expired while the app was open.
+              const now = Date.now();
+              if (!showHistory) setHistory((h) => prune(h, now));
+              setShowHistory((s) => !s);
+            }}
+          >
+            <History size={14} />
+          </button>
+          {(msgs.length > 0 || showHistory) && (
+            <button
+              className="icon-btn h-8 w-8"
+              title={t("ai.newChat")}
+              aria-label={t("ai.newChat")}
+              onClick={() => {
+                setChatId(null);
+                setShowHistory(false);
+              }}
+              disabled={busy}
+            >
+              <SquarePen size={14} />
             </button>
           )}
           <button className="icon-btn h-8 w-8" aria-label={t("ai.closePanel")} onClick={() => setAiOpen(false)}>
@@ -284,7 +314,25 @@ export function AIPanel() {
         <AlertTriangle size={14} className="shrink-0" /> {t("ai.warning")}
       </div>
 
-      <div ref={scroller} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      {showHistory && (
+        <HistoryList
+          history={history}
+          activeId={chatId}
+          busy={busy}
+          onOpen={(id) => {
+            setChatId(id);
+            setShowHistory(false);
+          }}
+          onDelete={(id) => {
+            setHistory((h) => h.filter((c) => c.id !== id));
+            if (id === chatId) setChatId(null);
+          }}
+          onClearAll={() => {
+            if (window.confirm(t("hist.clearConfirm"))) clearHistory();
+          }}
+        />
+      )}
+      <div ref={scroller} className={`flex-1 space-y-4 overflow-y-auto px-4 py-4 ${showHistory ? "hidden" : ""}`}>
         {msgs.length === 0 && (
           <div className="space-y-4">
             <div className="rounded-xl border border-line bg-panel-2 p-4 text-sm text-ink-2">
@@ -406,7 +454,7 @@ export function AIPanel() {
       </div>
 
       <form
-        className="border-t border-line p-3"
+        className={`border-t border-line p-3 ${showHistory ? "hidden" : ""}`}
         onSubmit={(e) => {
           e.preventDefault();
           send(input, attach, upload);
@@ -501,7 +549,7 @@ export function AIPanel() {
                 <Square size={12} />
               </button>
             ) : (
-              <button type="submit" className="icon-btn ml-auto h-8 w-8 !border-gold !bg-gold !text-[#171410]" aria-label={t("ai.send")} disabled={!input.trim() && !upload}>
+              <button type="submit" className="icon-btn ml-auto h-8 w-8 !border-gold !bg-gold !text-on-gold" aria-label={t("ai.send")} disabled={!input.trim() && !upload}>
                 <ArrowUp size={16} />
               </button>
             )}
@@ -550,6 +598,104 @@ function DrawCard({ draw }: { draw: { items: Drawing[]; symbol: string } }) {
           {t("ai.drawAdd")}
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Past conversations on this device, grouped by day. Each one is deleted 7 days after its last message. */
+function HistoryList({
+  history,
+  activeId,
+  busy,
+  onOpen,
+  onDelete,
+  onClearAll,
+}: {
+  history: Conversation<Msg>[];
+  activeId: string | null;
+  busy: boolean;
+  onOpen(id: string): void;
+  onDelete(id: string): void;
+  onClearAll(): void;
+}) {
+  const { t, locale } = useT();
+  // Captured when the list opens; the list is short-lived so it doesn't need to tick.
+  const [now] = useState(() => Date.now());
+  const groups = (["today", "yesterday", "earlier"] as const)
+    .map((g) => ({ g, items: history.filter((c) => dayGroup(c.updatedAt, now) === g) }))
+    .filter((x) => x.items.length);
+
+  return (
+    <div className="enter flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-2 px-4 pb-2 pt-4">
+        <h2 className="text-sm font-semibold">{t("hist.title")}</h2>
+        <span className="rounded-full bg-panel-3 px-2 py-0.5 text-[10px] text-muted">{history.length}</span>
+      </div>
+      <div className="mx-4 mb-3 flex items-start gap-2.5 rounded-xl border border-line bg-panel-2 px-3 py-2.5 text-[11px] leading-snug text-ink-2">
+        <Clock size={14} className="mt-0.5 shrink-0 text-gold" />
+        <span>{t("hist.note", { days: HISTORY_TTL_DAYS })}</span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {!groups.length && (
+          <div className="flex flex-col items-center px-6 py-12 text-center">
+            <div className="mb-3 grid h-12 w-12 place-items-center rounded-2xl border border-line-2 bg-panel-3">
+              <MessagesSquare size={20} className="text-gold" />
+            </div>
+            <p className="text-sm font-medium">{t("hist.empty")}</p>
+            <p className="mt-1 text-xs text-muted">{t("hist.emptyHint")}</p>
+          </div>
+        )}
+        {groups.map(({ g, items }) => (
+          <div key={g} className="mb-2">
+            <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted">{t(`hist.${g}`)}</div>
+            <ul className="space-y-0.5">
+              {items.map((c) => {
+                const active = c.id === activeId;
+                const left = daysLeft(c, now);
+                return (
+                  <li key={c.id} className="group relative">
+                    <button
+                      className={`flex w-full flex-col rounded-xl px-3 py-2.5 pr-10 text-left transition ${active ? "bg-panel-3" : "hover:bg-panel-2"}`}
+                      onClick={() => onOpen(c.id)}
+                      disabled={busy && !active}
+                      aria-current={active ? "true" : undefined}
+                    >
+                      <span className={`truncate text-sm ${active ? "text-gold" : "text-ink"}`}>{c.title || t("ai.newChat")}</span>
+                      <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted">
+                        {new Date(c.updatedAt).toLocaleString(locale, g === "earlier" ? { weekday: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" })}
+                        <span aria-hidden>·</span>
+                        {t("hist.msgs", { n: c.msgs.length })}
+                        {left <= 2 && (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span className="text-down">{t("hist.expires", { n: left })}</span>
+                          </>
+                        )}
+                      </span>
+                    </button>
+                    <button
+                      className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-lg text-muted opacity-100 hover:bg-panel-3 hover:text-down sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                      aria-label={t("hist.delete")}
+                      title={t("hist.delete")}
+                      onClick={() => onDelete(c.id)}
+                      disabled={busy && active}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+      {history.length > 0 && (
+        <div className="border-t border-line p-3">
+          <button className="btn w-full justify-center text-down" onClick={onClearAll} disabled={busy}>
+            <Trash2 size={14} /> {t("hist.clearAll")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
