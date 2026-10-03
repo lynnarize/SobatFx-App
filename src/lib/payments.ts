@@ -304,9 +304,14 @@ export function displayStatus(o: Order): Order["status"] {
   return o.status === "pending" && o.method === "transfer" && (o.expiresAt ?? 0) < Date.now() ? "expired" : o.status;
 }
 
+/** Telegram account customers send their transfer screenshot to (PROOF_TELEGRAM_USERNAME, default @firmantuhepaly). */
+export const proofContact = () => (process.env.PROOF_TELEGRAM_USERNAME || "firmantuhepaly").trim().replace(/^@/, "");
+
 /** What the customer's dialog needs to show and to poll. */
 export function transferView(o: Order) {
-  const bot = process.env.TELEGRAM_BOT_USERNAME?.replace(/^@/, "");
+  const contact = proofContact();
+  // Prefilled chat message, so the owner can match the screenshot to the order and the Google account.
+  const text = [`Halo, ini bukti transfer SobatFX.`, `Order: ${o.id}`, `Email Google: ${o.email}`, `Jumlah: Rp ${o.amount.toLocaleString("id-ID")}`].join("\n");
   return {
     orderId: o.id,
     amount: o.amount,
@@ -316,6 +321,8 @@ export function transferView(o: Order) {
     status: displayStatus(o),
     claimed: Boolean(o.claimedAt),
     bank: bankAccount(),
-    proofUrl: bot ? `https://t.me/${bot}?start=${o.id}` : undefined,
+    email: o.email,
+    proofContact: contact,
+    proofUrl: `https://t.me/${contact}?text=${encodeURIComponent(text)}`,
   };
 }

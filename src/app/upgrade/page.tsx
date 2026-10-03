@@ -35,7 +35,9 @@ interface TransferPay {
   status: "pending" | "paid" | "expired" | "failed";
   claimed: boolean;
   bank: { name: string; number: string; holder: string };
-  proofUrl?: string;
+  email: string;
+  proofContact: string;
+  proofUrl: string;
 }
 
 const idr = (n: number) => "Rp " + n.toLocaleString("id-ID");
@@ -420,7 +422,8 @@ function TransferModal({ pay, onChange, onClose }: { pay: TransferPay; onChange(
     if (left === 0 && pay.status === "pending") changeCb.current({ status: "expired" });
   }, [left, pay.status]);
 
-  const claim = async () => {
+  const claim = async (quiet = false) => {
+    if (pay.claimed) return;
     setErr(null);
     setSending(true);
     try {
@@ -429,7 +432,7 @@ function TransferModal({ pay, onChange, onClose }: { pay: TransferPay; onChange(
       if (!r.ok) throw new Error(j.error);
       onChange({ claimed: true });
     } catch (e) {
-      setErr((e as Error).message || t("up.couldNotStart"));
+      if (!quiet) setErr((e as Error).message || t("up.couldNotStart"));
     } finally {
       setSending(false);
     }
@@ -453,22 +456,32 @@ function TransferModal({ pay, onChange, onClose }: { pay: TransferPay; onChange(
             </div>
             <p className="mt-3 text-xs text-gold">{t("xfer.exact")}</p>
             <p className="mt-1 text-xs text-muted">{t("xfer.deadline", { time: clock(left) })}</p>
+            <div className="mt-4 rounded-xl border border-line-2 p-3 text-left">
+              <h3 className="text-sm font-semibold">{t("xfer.proofTitle")}</h3>
+              <ol className="mt-2 list-decimal space-y-1.5 pl-4 text-xs text-ink-2">
+                <li>{t("xfer.step1")}</li>
+                <li>{t("xfer.step2", { contact: `@${pay.proofContact}` })}</li>
+                <li>{t("xfer.step3")}</li>
+              </ol>
+              <div className="mt-3">
+                <CopyRow label={t("xfer.email")} value={pay.email} copy={pay.email} />
+              </div>
+              {/* Sending proof also counts as "I've paid", so the order lands in the owner's approval queue. */}
+              <a className="btn btn-gold mt-3 w-full justify-center" href={pay.proofUrl} target="_blank" rel="noreferrer" onClick={() => void claim(true)}>
+                <Send size={14} /> {t("xfer.sendProof")}
+              </a>
+            </div>
             {pay.claimed ? (
               <div className="mt-4 rounded-xl border border-gold-deep/40 bg-gold-soft p-3 text-sm text-gold">
                 <Loader2 size={14} className="mr-1.5 inline animate-spin" />
                 {t("xfer.claimed")}
               </div>
             ) : (
-              <button className="btn btn-gold mt-4 w-full justify-center" onClick={claim} disabled={sending}>
+              <button className="btn mt-2 w-full justify-center" onClick={() => claim()} disabled={sending}>
                 {sending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {t("xfer.paid")}
               </button>
             )}
             {err && <p className="mt-2 text-xs text-down">{err}</p>}
-            {pay.proofUrl && (
-              <a className="btn mt-2 w-full justify-center" href={pay.proofUrl} target="_blank" rel="noreferrer">
-                <Send size={14} /> {t("xfer.proof")}
-              </a>
-            )}
             <p className="mt-3 text-[10px] text-muted">{t("qris.order", { id: pay.orderId })}</p>
           </>
         ) : (

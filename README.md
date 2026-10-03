@@ -146,7 +146,7 @@ Keys never reach the browser. Still set a **monthly spend limit** on the OpenRou
    `ULTIMATE_VOUCHER_CODE` / `ULTIMATE_VOUCHER_PRICE_IDR` likewise. Change the code in Vercel and redeploy; unset it to turn the field off.
 6. **Bank transfer** (optional, alongside QRIS): set `BANK_NAME`, `BANK_ACCOUNT_NUMBER`, `BANK_ACCOUNT_HOLDER`, then create a bot with
    @BotFather and set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (`openssl rand -hex 24`) and `TELEGRAM_ADMIN_IDS` (your numeric id, from @userinfobot).
-   After deploying run `npm run telegram:webhook -- https://YOUR-DOMAIN` once. Optional `TELEGRAM_BOT_USERNAME` adds a "send proof" button.
+   After deploying run `npm run telegram:webhook -- https://YOUR-DOMAIN` once. The transfer dialog's "Kirim bukti transfer" button opens a Telegram chat with `PROOF_TELEGRAM_USERNAME` (default `firmantuhepaly`), prefilled with the order number, Google email and amount.
 7. **Calendar history** (free, recommended): the prediction history only fills in when something loads the calendar, so a GitHub
    Action (`.github/workflows/news-cron.yml`) calls `/api/cron/news` every hour. In Vercel set `CRON_SECRET` (`openssl rand -hex 24`); in production the route refuses to run without it.
    In the GitHub repo → Settings → Secrets and variables → Actions, add the variable `APP_URL=https://YOUR-DOMAIN` and the secret
