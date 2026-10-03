@@ -14,11 +14,18 @@ export interface UserRecord {
 
 const userKey = (email: string) => `user:${email.toLowerCase()}`;
 
-const adminEmails = () =>
-  (process.env.ADMIN_EMAILS || "")
+const emailList = (v: string | undefined) =>
+  (v || "")
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
+const adminEmails = () => emailList(process.env.ADMIN_EMAILS);
+/** Testers keep their own tier (so they can try Free/Pro as users see it) but get the staff AI limit. */
+const testerEmails = () => emailList(process.env.TESTER_EMAILS);
+const isStaff = (email: string) => {
+  const e = email.toLowerCase();
+  return adminEmails().includes(e) || testerEmails().includes(e);
+};
 
 export async function getUser(email: string) {
   return kv.get<UserRecord>(userKey(email));
@@ -63,12 +70,19 @@ export async function grantTier(email: string, tier: PaidTier, days: number, ord
 
 // ─── Usage limits ────────────────────────────────────────────────────────
 
+const n = (v: string | undefined, d: number) => (v && !Number.isNaN(+v) ? +v : d);
+
 export function tierLimit(tier: Tier) {
-  const n = (v: string | undefined, d: number) => (v && !Number.isNaN(+v) ? +v : d);
   if (tier === "ultimate") return { limit: n(process.env.ULTIMATE_DAILY_LIMIT, 40), period: "daily" as const };
   if (tier === "pro") return { limit: n(process.env.PRO_DAILY_LIMIT, 10), period: "daily" as const };
   const period = process.env.FREE_LIMIT_PERIOD === "lifetime" ? ("lifetime" as const) : ("daily" as const);
   return { limit: n(process.env.FREE_REQUEST_LIMIT, 5), period };
+}
+
+/** The account's AI limit: admins and testers (ADMIN_EMAILS, TESTER_EMAILS) get STAFF_DAILY_LIMIT (default 80) a day on any tier. */
+function userLimit(email: string, tier: Tier) {
+  if (isStaff(email)) return { limit: n(process.env.STAFF_DAILY_LIMIT, 80), period: "daily" as const };
+  return tierLimit(tier);
 }
 
 // Days roll over at 00:00 WIB (UTC+7) — most SobatFX users are in Indonesia.
@@ -81,12 +95,12 @@ function nextWibMidnight() {
 }
 
 function usageKey(email: string, tier: Tier) {
-  const { period } = tierLimit(tier);
+  const { period } = userLimit(email, tier);
   return period === "lifetime" ? `usage:${email}:${tier}:all` : `usage:${email}:${tier}:${wibDay()}`;
 }
 
 export async function getUsage(email: string, tier: Tier) {
-  const { limit, period } = tierLimit(tier);
+  const { limit, period } = userLimit(email, tier);
   const used = Number((await kv.get<number>(usageKey(email, tier))) ?? 0);
   return { used, limit, period, resetsAt: period === "daily" ? nextWibMidnight() : null };
 }
@@ -94,7 +108,7 @@ export async function getUsage(email: string, tier: Tier) {
 /** Atomically reserves one request. Call refundUsage() if the model call fails. */
 export async function consumeUsage(email: string, tier: Tier) {
   const key = usageKey(email, tier);
-  const { limit, period } = tierLimit(tier);
+  const { limit, period } = userLimit(email, tier);
   const used = await kv.incr(key);
   if (used === 1 && period === "daily") await kv.expire(key, 2 * 86_400);
   if (used > limit) {
