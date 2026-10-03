@@ -73,7 +73,8 @@ npm install
 npm run dev
 ```
 
-Without Redis the app uses in-memory storage, which is fine for local dev.
+Without Redis the app uses in-memory storage, which is fine for local dev. A production server refuses to start without Redis
+(payments, quotas and rate limits would not be shared between instances); `ALLOW_MEMORY_STORE=true` overrides that for a single-instance trial.
 Without a model key, that tier replies "not configured".
 
 ## Checks
@@ -95,6 +96,7 @@ Set `DEMO_MODE=true` to put the app online without Google login:
 
 Protect your AI credits:
 - `DEMO_DAILY_CAP` (default 300): total AI requests per day across all demo visitors.
+- `DEMO_ULTIMATE_DAILY_CAP` (default 30): of those, how many may use Ultra (the expensive model; anyone can pick it in the demo).
 
 The tier switch also works locally with `DEV_SKIP_AUTH`. For real users (demo off), the switch only shows their paid plan, and the other tiers link to the plans page.
 `DEMO_PRO_VIA_OPENCODE=true` (plus `OPENCODE_GO_API_KEY`) runs demo Pro through your OpenCode Go subscription instead of OpenRouter. OpenCode Go is meant for coding agents and they monitor traffic, so keep the demo small. This stops automatically once `DEMO_MODE` is off.
@@ -107,13 +109,16 @@ Cheapest checks run first:
 
 | # | Layer | Stops |
 |---|---|---|
-| 1 | Same-origin check (`Origin`/`Referer` must be this site, plus `ALLOWED_ORIGINS`) | other sites, `curl` and scripts calling the API |
+| 1 | Same-origin check (`Origin`/`Referer` must be this site, plus `ALLOWED_ORIGINS`) | other websites calling the API from a visitor's browser (scripts can fake `Origin`, so layers 2–3 handle those) |
 | 2 | **Vercel BotID** (`initBotId` in `src/instrumentation-client.ts`, `checkBotId` on the server) | headless browsers and scripted clients, with no CAPTCHA for real users |
 | 3 | Per-IP rate limit, in Redis (`AI_IP_PER_MIN`) | bursts from one address, across all serverless instances |
 | 4 | Per-user rate limit (`AI_USER_PER_MIN`) and one reply at a time per user | one account firing many requests at once |
 | 5 | Body cap (3 MB, checked while reading) and the input caps in the zod schema | huge payloads |
 | 6 | Per-tier daily quota (`FREE_REQUEST_LIMIT`, `PRO_DAILY_LIMIT`, `ULTIMATE_DAILY_LIMIT`) | one account running up its own plan |
 | 7 | App-wide daily cap (`AI_GLOBAL_DAILY_CAP`) | many farmed or leaked accounts together |
+
+Per-IP limits only trust forwarded headers on Vercel or with `TRUST_PROXY=true`. Behind your own proxy, set `CLIENT_IP_HEADER`
+to the header it overwrites (e.g. `cf-connecting-ip`, `x-real-ip`); otherwise the last `X-Forwarded-For` entry is used.
 
 Layers 1–3 also cover `POST /api/payments/qris` (each call creates a Midtrans order). The public data routes
 (`/api/candles`, `/api/quotes`, `/api/news`) only get the per-IP limit, to protect the market-data providers.
@@ -136,12 +141,14 @@ Keys never reach the browser. Still set a **monthly spend limit** on the OpenRou
    `OPENCODE_GO_API_KEY` is only for local testing and the temporary demo, never for production (see below).
 5. **QRIS (Midtrans)**: set `MIDTRANS_SERVER_KEY` and `MIDTRANS_IS_PRODUCTION`. In the Midtrans dashboard, set
    Settings → Payment → Notification URL = `https://YOUR-DOMAIN/api/payments/notify`, and make sure QRIS is enabled for your account.
-   Prices: `PRO_PRICE_IDR`, `ULTIMATE_PRICE_IDR`, `PLAN_DAYS`.
+   Prices: `PRO_PRICE_IDR` (default 149000), `ULTIMATE_PRICE_IDR`, `PLAN_DAYS`.
+   Vouchers (optional): `PRO_VOUCHER_CODE` (one or more codes, comma-separated, case-insensitive) sells Pro at `PRO_VOUCHER_PRICE_IDR` (default 129000);
+   `ULTIMATE_VOUCHER_CODE` / `ULTIMATE_VOUCHER_PRICE_IDR` likewise. Change the code in Vercel and redeploy; unset it to turn the field off.
 6. **Bank transfer** (optional, alongside QRIS): set `BANK_NAME`, `BANK_ACCOUNT_NUMBER`, `BANK_ACCOUNT_HOLDER`, then create a bot with
    @BotFather and set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` (`openssl rand -hex 24`) and `TELEGRAM_ADMIN_IDS` (your numeric id, from @userinfobot).
    After deploying run `npm run telegram:webhook -- https://YOUR-DOMAIN` once. Optional `TELEGRAM_BOT_USERNAME` adds a "send proof" button.
 7. **Calendar history** (free, recommended): the prediction history only fills in when something loads the calendar, so a GitHub
-   Action (`.github/workflows/news-cron.yml`) calls `/api/cron/news` every hour. In Vercel set `CRON_SECRET` (`openssl rand -hex 24`).
+   Action (`.github/workflows/news-cron.yml`) calls `/api/cron/news` every hour. In Vercel set `CRON_SECRET` (`openssl rand -hex 24`); in production the route refuses to run without it.
    In the GitHub repo → Settings → Secrets and variables → Actions, add the variable `APP_URL=https://YOUR-DOMAIN` and the secret
    `CRON_SECRET` (same value). Test it with Actions → News history → Run workflow.
 8. Optional: `TWELVEDATA_API_KEY`, used only as a backup history source if Kraken is unreachable (not live).

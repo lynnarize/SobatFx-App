@@ -1,6 +1,6 @@
 import { Redis } from "@upstash/redis";
 
-// Tiny KV facade: Upstash Redis in production, in-memory Map for local dev.
+// Tiny KV facade: Upstash Redis in production (required there), in-memory Map for local dev.
 
 interface KV {
   get<T>(key: string): Promise<T | null>;
@@ -14,8 +14,8 @@ interface KV {
   /** Append to a list, uncapped (permanent logs). */
   rpush(key: string, value: string): Promise<void>;
   lrange(key: string, start: number, stop: number): Promise<string[]>;
-  /** SET NX with a TTL: true when this caller took the key. */
-  lock(key: string, ttlSec: number): Promise<boolean>;
+  /** SET NX with a TTL: true when this caller took the key. `value` records who holds it (default 1). */
+  lock(key: string, ttlSec: number, value?: string): Promise<boolean>;
   del(key: string): Promise<void>;
   /** Atomic compare-and-set on a `{ rev, ... }` document: writes `value` only while the stored rev (0 if none) is `baseRev`. */
   setIfRev(key: string, baseRev: number, value: { rev: number }): Promise<boolean>;
@@ -53,7 +53,7 @@ function redisKV(url: string, token: string): KV {
       await r.rpush(k, v);
     },
     lrange: (k, a, b) => r.lrange<string>(k, a, b),
-    lock: async (k, ttl) => (await r.set(k, 1, { nx: true, ex: ttl })) === "OK",
+    lock: async (k, ttl, v) => (await r.set(k, v ?? 1, { nx: true, ex: ttl })) === "OK",
     del: async (k) => {
       await r.del(k);
     },
@@ -105,9 +105,9 @@ function memoryKV(): KV {
     },
     lrange: async (k, a, b) => ((live(k)?.v as string[]) ?? []).slice(a, b < 0 ? undefined : b + 1),
     // No await between the check and the write, so these are atomic within the process.
-    lock: async (k, ttl) => {
+    lock: async (k, ttl, v) => {
       if (live(k)) return false;
-      m.set(k, { v: 1, exp: Date.now() + ttl * 1000 });
+      m.set(k, { v: v ?? 1, exp: Date.now() + ttl * 1000 });
       return true;
     },
     del: async (k) => {
@@ -124,8 +124,17 @@ function memoryKV(): KV {
 const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
 const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 
-if (!url && process.env.VERCEL_ENV === "production") {
-  console.warn("[sobatfx] No Redis configured — using in-memory storage. Users, usage and payments will NOT persist.");
+// A production server on in-memory storage loses users and payments, and every instance gets its own rate limits,
+// quotas and payment locks. So it refuses to start, unless ALLOW_MEMORY_STORE=true (a single-instance trial run).
+// `next build` itself is allowed: it imports this file without needing the store.
+if (!(url && token) && process.env.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
+  if (process.env.ALLOW_MEMORY_STORE !== "true") {
+    throw new Error(
+      "[sobatfx] Redis is not configured (UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN, or KV_REST_API_URL + KV_REST_API_TOKEN). " +
+        "Refusing to run production on in-memory storage. Set ALLOW_MEMORY_STORE=true to override (single instance only).",
+    );
+  }
+  console.warn("[sobatfx] ALLOW_MEMORY_STORE=true — using in-memory storage. Users, usage and payments will NOT persist.");
 }
 
 export const kv: KV = url && token ? redisKV(url, token) : memoryKV();

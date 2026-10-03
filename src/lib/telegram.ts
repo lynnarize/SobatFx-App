@@ -5,10 +5,10 @@ import crypto from "node:crypto";
 
 const token = () => process.env.TELEGRAM_BOT_TOKEN ?? "";
 
-/** Numeric Telegram user ids allowed to approve payments (TELEGRAM_ADMIN_IDS, comma-separated). */
+/** Numeric Telegram user ids allowed to approve payments (TELEGRAM_ADMIN_IDS; commas, spaces, semicolons or new lines between them). */
 export const adminIds = () =>
   (process.env.TELEGRAM_ADMIN_IDS || "")
-    .split(",")
+    .split(/[\s,;]+/)
     .map((s) => s.trim())
     .filter((s) => /^\d+$/.test(s))
     .map(Number);

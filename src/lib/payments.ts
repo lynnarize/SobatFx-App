@@ -28,6 +28,8 @@ export interface Order {
   claimedAt?: number;
   /** Manual grants only: which admin did it. */
   note?: string;
+  /** Voucher code that set the price (lowercased), if any. */
+  voucher?: string;
 }
 
 export function plans() {
@@ -35,9 +37,29 @@ export function plans() {
   // listPriceUsd: the normal price shown struck through next to the (discounted) IDR price that QRIS charges.
   const usd = (v: string | undefined, d?: number) => (v ? Number(v) || undefined : d);
   return {
-    pro: { tier: "pro" as const, priceIdr: Number(process.env.PRO_PRICE_IDR || 99000), listPriceUsd: usd(process.env.PRO_LIST_PRICE_USD, 10), days },
+    pro: { tier: "pro" as const, priceIdr: Number(process.env.PRO_PRICE_IDR || 149000), listPriceUsd: usd(process.env.PRO_LIST_PRICE_USD, 10), days },
     ultimate: { tier: "ultimate" as const, priceIdr: Number(process.env.ULTIMATE_PRICE_IDR || 299000), listPriceUsd: usd(process.env.ULTIMATE_LIST_PRICE_USD), days },
   };
+}
+
+/**
+ * Voucher codes per plan: PRO_VOUCHER_CODE (comma-separated, case-insensitive) sells Pro at PRO_VOUCHER_PRICE_IDR
+ * (default 129000); ULTIMATE_VOUCHER_CODE / ULTIMATE_VOUCHER_PRICE_IDR likewise. Unset code = no voucher.
+ * Returns the discounted price, or null if the code isn't valid for that plan.
+ */
+export function voucherPrice(tier: PaidTier, code: unknown): number | null {
+  if (typeof code !== "string" || !code.trim()) return null;
+  const env = tier === "pro" ? "PRO" : "ULTIMATE";
+  const codes = (process.env[`${env}_VOUCHER_CODE`] ?? "").split(",").map((c) => c.trim().toLowerCase()).filter(Boolean);
+  if (!codes.includes(code.trim().toLowerCase())) return null;
+  const price = Number(process.env[`${env}_VOUCHER_PRICE_IDR`] || (tier === "pro" ? 129000 : 0));
+  return price > 0 && price < plans()[tier].priceIdr ? price : null;
+}
+
+/** The plan's price for this order, with the voucher applied when it is valid. */
+function priceFor(tier: PaidTier, voucher?: string) {
+  const v = voucherPrice(tier, voucher);
+  return v ? { price: v, voucher: voucher!.trim().toLowerCase() } : { price: plans()[tier].priceIdr, voucher: undefined };
 }
 
 const base = () => (process.env.MIDTRANS_IS_PRODUCTION === "true" ? "https://api.midtrans.com" : "https://api.sandbox.midtrans.com");
@@ -59,16 +81,17 @@ export const saleTiers = (): PaidTier[] =>
 
 const newOrderId = (tier: PaidTier, kind = "") => `SFX-${kind}${tier.toUpperCase()}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`.toUpperCase();
 
-export async function createQrisOrder(email: string, tier: PaidTier): Promise<Order> {
+export async function createQrisOrder(email: string, tier: PaidTier, voucherCode?: string): Promise<Order> {
   const plan = plans()[tier];
+  const { price, voucher } = priceFor(tier, voucherCode);
   const id = newOrderId(tier);
   const r = await fetch(`${base()}/v2/charge`, {
     method: "POST",
     headers: { Authorization: auth(), "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
       payment_type: "qris",
-      transaction_details: { order_id: id, gross_amount: plan.priceIdr },
-      item_details: [{ id: `plan-${tier}`, price: plan.priceIdr, quantity: 1, name: `SobatFX AI ${tier === "pro" ? "Pro" : "Ultra"} ${plan.days} hari` }],
+      transaction_details: { order_id: id, gross_amount: price },
+      item_details: [{ id: `plan-${tier}`, price, quantity: 1, name: `SobatFX AI ${tier === "pro" ? "Pro" : "Ultra"} ${plan.days} hari` }],
       customer_details: { email },
       qris: { acquirer: "gopay" },
       custom_expiry: { expiry_duration: 15, unit: "minute" },
@@ -83,11 +106,12 @@ export async function createQrisOrder(email: string, tier: PaidTier): Promise<Or
     id,
     email,
     tier,
-    amount: plan.priceIdr,
+    amount: price,
     days: plan.days,
     status: "pending",
     createdAt: Date.now(),
     method: "qris",
+    voucher,
     qrString: j.qr_string,
     expiresAt: j.expiry_time ? Date.parse(j.expiry_time.replace(" ", "T") + "+07:00") : Date.now() + 15 * 60_000,
   };
@@ -148,11 +172,11 @@ export async function syncOrder(id: string): Promise<Order | null> {
 }
 
 export function validNotificationSignature(n: { order_id: string; status_code: string; gross_amount: string; signature_key: string }) {
-  const expected = crypto
-    .createHash("sha512")
-    .update(n.order_id + n.status_code + n.gross_amount + (process.env.MIDTRANS_SERVER_KEY ?? ""))
-    .digest("hex");
-  return n.signature_key?.length === expected.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(n.signature_key));
+  const key = process.env.MIDTRANS_SERVER_KEY;
+  // The body is untrusted JSON: anything but 128 hex chars (a SHA-512) is rejected before comparing, so the buffers always match in length.
+  if (!key || typeof n.signature_key !== "string" || !/^[0-9a-f]{128}$/i.test(n.signature_key)) return false;
+  const expected = crypto.createHash("sha512").update(n.order_id + n.status_code + n.gross_amount + key).digest();
+  return crypto.timingSafeEqual(expected, Buffer.from(n.signature_key, "hex"));
 }
 
 // ─── Bank transfer (manual approval through Telegram) ────────────────────
@@ -169,41 +193,58 @@ export function bankAccount() {
 /** Needs the bank details and a working Telegram bot: without the bot nobody would ever approve the order. */
 export const transferConfigured = () => Boolean(bankAccount() && telegramConfigured());
 
-/**
- * Price + a 3-digit code nobody else is using right now, so the owner can tell orders apart on the bank statement.
- * Reserved for a little longer than the order lives, so two open orders never share an amount.
- */
-export async function reserveUniqueAmount(base: number): Promise<number> {
+// Each amount is held by one order (the key stores its id) until the owner settles it:
+//  - unclaimed: a little longer than the payment deadline, so abandoned orders give their code back within a day;
+//  - claimed ("I've paid" / proof sent): long enough for a late approval, since an expired order can still be approved.
+const UNCLAIMED_HOLD_SEC = TRANSFER_HOURS * 3600 + 3600;
+const CLAIMED_HOLD_SEC = 14 * 86400;
+const amountKey = (amount: number) => `transferamt:${amount}`;
+
+/** Price + a 3-digit code no unsettled order is using, so the owner can tell orders apart on the bank statement. */
+export async function reserveUniqueAmount(base: number, orderId: string): Promise<number> {
   const start = crypto.randomInt(0, 999);
   for (let i = 0; i < 999; i++) {
     const amount = base + ((start + i) % 999) + 1;
-    const key = `transferamt:${amount}`;
-    if ((await kv.incr(key)) === 1) {
-      await kv.expire(key, TRANSFER_HOURS * 3600 + 3600);
-      return amount;
-    }
-    await kv.decr(key);
+    if (await kv.lock(amountKey(amount), UNCLAIMED_HOLD_SEC, orderId)) return amount;
   }
   throw new Error("No free transfer amount");
 }
 
+/** Keeps a claimed order's amount taken until the owner decides (retaking it if the short hold already lapsed). */
+async function holdAmount(o: Order) {
+  const key = amountKey(o.amount);
+  if (await kv.lock(key, CLAIMED_HOLD_SEC, o.id)) return;
+  if ((await kv.get<string>(key)) === o.id) await kv.expire(key, CLAIMED_HOLD_SEC);
+  else console.warn(`[payments] transfer amount ${o.amount} of ${o.id} is now held by another order`);
+}
+
+/** Gives the amount back once the order is settled, but only while this order is still the one holding it. */
+async function releaseAmount(o: Order) {
+  const key = amountKey(o.amount);
+  if ((await kv.get<string>(key)) === o.id) await kv.del(key);
+}
+
 /** Creates the customer's transfer order, or returns the one they already have open for this plan (reopening the dialog is free). */
-export async function createTransferOrder(email: string, tier: PaidTier): Promise<Order> {
+export async function createTransferOrder(email: string, tier: PaidTier, voucherCode?: string): Promise<Order> {
+  const { price, voucher } = priceFor(tier, voucherCode);
   const openKey = `transfer:open:${email}:${tier}`;
   const openId = await kv.get<string>(openKey);
   const open = openId ? await getOrder(openId) : null;
-  if (open?.status === "pending" && (open.expiresAt ?? 0) > Date.now()) return open;
+  // Reuse only if it was made at the same price (a voucher added or removed since gets a new order).
+  if (open?.status === "pending" && (open.expiresAt ?? 0) > Date.now() && open.voucher === voucher) return open;
 
   const plan = plans()[tier];
+  const id = newOrderId(tier, "T");
   const order: Order = {
-    id: newOrderId(tier, "T"),
+    id,
     email,
     tier,
-    amount: await reserveUniqueAmount(plan.priceIdr),
+    amount: await reserveUniqueAmount(price, id),
     days: plan.days,
     status: "pending",
     createdAt: Date.now(),
     method: "transfer",
+    voucher,
     expiresAt: Date.now() + TRANSFER_MS,
   };
   await kv.set(orderKey(order.id), order, { ex: 90 * 86400 });
@@ -217,6 +258,7 @@ export async function claimTransfer(order: Order): Promise<boolean> {
   order.claimedAt = Date.now();
   await kv.set(orderKey(order.id), order, { ex: 90 * 86400 });
   await kv.lpushCapped("transfer:claims", order.id, 50);
+  await holdAmount(order);
   return true;
 }
 
@@ -233,6 +275,7 @@ export async function approveTransfer(id: string): Promise<{ order: Order; grant
   if (!order || order.method !== "transfer") return null;
   if (order.status === "paid" || order.status === "failed") return { order, granted: false };
   const paid = await markPaid(order);
+  if (paid.status === "paid") await releaseAmount(paid);
   return { order: paid, granted: paid.status === "paid" };
 }
 
@@ -242,6 +285,7 @@ export async function rejectTransfer(id: string): Promise<{ order: Order; reject
   if (order.status === "paid" || order.status === "failed") return { order, rejected: false };
   order.status = "failed";
   await kv.set(orderKey(id), order, { ex: 90 * 86400 });
+  await releaseAmount(order);
   return { order, rejected: true };
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CheckCircle2, Copy, Crown, Landmark, Loader2, LogIn, QrCode, Send, X } from "lucide-react";
+import { Check, CheckCircle2, Copy, Crown, Landmark, Loader2, LogIn, QrCode, Send, Ticket, X } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { useT } from "@/components/i18n";
@@ -13,6 +13,7 @@ interface Plans {
   transferEnabled?: boolean;
   qrisSoon?: boolean;
   saleTiers?: PaidTier[];
+  vouchers?: Partial<Record<PaidTier, boolean>>;
   plans: Record<Tier, { priceIdr: number; listPriceUsd?: number; listPriceIdr?: number; days?: number; limit: number; period: "daily" | "lifetime" }>;
 }
 interface Pay {
@@ -48,6 +49,8 @@ export default function UpgradePage() {
   const [transfer, setTransfer] = useState<TransferPay | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Applied vouchers per plan: the code is sent with the order, the server re-checks it and sets the price.
+  const [vouchers, setVouchers] = useState<Partial<Record<PaidTier, { code: string; priceIdr: number }>>>({});
 
   useEffect(() => {
     fetch("/api/plans").then((r) => r.json()).then(setPlans).catch(() => {});
@@ -58,7 +61,7 @@ export default function UpgradePage() {
     setErr(null);
     setLoading(tier);
     try {
-      const r = await fetch("/api/payments/qris", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier }) });
+      const r = await fetch("/api/payments/qris", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier, voucher: vouchers[tier]?.code }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
       setPay({ ...j, status: "pending" });
@@ -74,7 +77,7 @@ export default function UpgradePage() {
     setErr(null);
     setLoading(`${tier}-transfer`);
     try {
-      const r = await fetch("/api/payments/transfer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier }) });
+      const r = await fetch("/api/payments/transfer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier, voucher: vouchers[tier]?.code }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
       setTransfer(j);
@@ -111,6 +114,7 @@ export default function UpgradePage() {
           const p = plans?.plans[tier];
           const featured = tier === "pro";
           const forSale = !plans?.saleTiers || plans.saleTiers.includes(tier as PaidTier);
+          const applied = tier === "free" ? undefined : vouchers[tier];
           return (
             <div key={tier} className={`card relative flex flex-col p-6 ${featured ? "border-gold-deep/60" : ""} ${tier === "ultimate" ? "bg-gradient-to-b from-gold-soft to-panel-2" : ""}`}>
               {featured && <span className="absolute -top-2.5 left-6 rounded-full bg-gold px-2.5 py-0.5 text-[11px] font-semibold text-on-gold">{t("up.popular")}</span>}
@@ -121,7 +125,11 @@ export default function UpgradePage() {
               </div>
               <p className="text-sm text-muted">{t(`tier.${tier}.tagline`)}</p>
               <div className="mt-4 flex flex-wrap items-baseline gap-x-1">
-                {p?.listPriceUsd
+                {applied && p ? (
+                  <span className="num mr-1 whitespace-nowrap text-lg text-muted line-through decoration-down/70" aria-label={t("up.normalPrice", { price: idr(p.priceIdr) })}>
+                    {idr(p.priceIdr)}
+                  </span>
+                ) : p?.listPriceUsd
                   ? (() => {
                       // Indonesian UI shows the normal price in rupiah (live USD→IDR rate); English keeps dollars.
                       const normal = lang === "id" && p.listPriceIdr ? idr(p.listPriceIdr) : `$${p.listPriceUsd}`;
@@ -132,7 +140,7 @@ export default function UpgradePage() {
                       );
                     })()
                   : null}
-                <span className="num whitespace-nowrap text-3xl font-medium">{p ? (p.priceIdr ? idr(p.priceIdr) : "Rp 0") : "…"}</span>
+                <span className="num whitespace-nowrap text-3xl font-medium">{p ? (applied ? idr(applied.priceIdr) : p.priceIdr ? idr(p.priceIdr) : "Rp 0") : "…"}</span>
                 {p?.priceIdr ? <span className="text-sm text-muted">{t("up.perDays", { n: p.days ?? 30 })}</span> : null}
               </div>
               <p className="mt-1 text-xs text-gold">{p ? t(p.period === "daily" ? "up.requestsDaily" : "up.requests", { n: p.limit }) : ""}</p>
@@ -158,6 +166,13 @@ export default function UpgradePage() {
                   </button>
                 ) : (
                   <div className="space-y-2">
+                    {plans?.vouchers?.[tier] && (
+                      <VoucherField
+                        tier={tier}
+                        applied={applied}
+                        onApply={(v) => setVouchers((all) => ({ ...all, [tier]: v ?? undefined }))}
+                      />
+                    )}
                     {(plans === null || plans.paymentsEnabled) && (
                       <button className={`btn w-full justify-center ${featured || tier === "ultimate" ? "btn-gold" : ""}`} onClick={() => buy(tier)} disabled={loading !== null}>
                         {loading === tier ? <Loader2 size={15} className="animate-spin" /> : <QrCode size={15} />}
@@ -206,6 +221,70 @@ export default function UpgradePage() {
         />
       )}
     </div>
+  );
+}
+
+function VoucherField({ tier, applied, onApply }: { tier: PaidTier; applied?: { code: string; priceIdr: number }; onApply(v: { code: string; priceIdr: number } | null): void }) {
+  const { t } = useT();
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (applied)
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-xl border border-gold-deep/40 bg-gold-soft px-3 py-2 text-sm text-gold">
+        <span className="flex min-w-0 items-center gap-1.5 truncate">
+          <Ticket size={14} className="shrink-0" /> {t("up.voucherApplied", { code: applied.code })}
+        </span>
+        <button className="shrink-0 text-xs underline" onClick={() => onApply(null)}>{t("up.removeVoucher")}</button>
+      </div>
+    );
+  if (!open)
+    return (
+      <button className="flex items-center gap-1.5 text-xs text-muted hover:text-ink-2" onClick={() => setOpen(true)}>
+        <Ticket size={13} /> {t("up.haveVoucher")}
+      </button>
+    );
+
+  const apply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const c = code.trim();
+    if (!c) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      const r = await fetch("/api/payments/voucher", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier, code: c }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error);
+      onApply({ code: c, priceIdr: j.priceIdr });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={apply}>
+      <div className="flex gap-2">
+        <input
+          className="field min-w-0 flex-1"
+          placeholder={t("up.voucher")}
+          aria-label={t("up.voucher")}
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          autoCapitalize="none"
+          autoComplete="off"
+          spellCheck={false}
+          autoFocus
+        />
+        <button className="btn shrink-0" type="submit" disabled={busy || !code.trim()}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : t("up.applyVoucher")}
+        </button>
+      </div>
+      {err && <p className="mt-1 text-xs text-down">{err}</p>}
+    </form>
   );
 }
 

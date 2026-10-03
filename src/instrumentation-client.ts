@@ -8,6 +8,7 @@ initBotId({
     { path: "/api/payments/qris", method: "POST" },
     { path: "/api/payments/transfer", method: "POST" },
     { path: "/api/payments/transfer/claim", method: "POST" },
+    { path: "/api/payments/voucher", method: "POST" },
     { path: "/api/sync", method: "PUT" },
   ],
 });

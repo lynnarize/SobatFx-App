@@ -4,7 +4,7 @@ import { kv } from "./store";
 
 // Layers that keep the AI (and other paid/upstream calls) from being leaked or drained.
 // Cheapest first, so abusive traffic is dropped before it costs a Redis call or a model call:
-//   1. same-origin check    — a script on another site (or curl) can't borrow the endpoint
+//   1. same-origin check    — another website can't call the endpoint from a visitor's browser (scripts can fake Origin)
 //   2. Vercel BotID         — invisible challenge; headless browsers and scripts fail it
 //   3. per-IP rate limit    — Redis fixed window, shared across serverless instances
 //   4. per-user rate limit  — (AI route) a signed-in account can't burst either
@@ -18,7 +18,13 @@ import { kv } from "./store";
 const trustProxy = () => Boolean(process.env.VERCEL) || process.env.TRUST_PROXY === "true";
 let warned = false;
 
-/** Client IP for the per-IP buckets. Without a trusted proxy every caller shares one bucket (strict, never spoofable). */
+/**
+ * Client IP for the per-IP buckets. Without a trusted proxy every caller shares one bucket (strict, never spoofable).
+ * Behind a proxy only a header that proxy writes itself can be believed:
+ *  - Vercel: x-vercel-forwarded-for (and x-real-ip), both overwritten by the platform;
+ *  - elsewhere: CLIENT_IP_HEADER names the header your proxy overwrites (cf-connecting-ip, x-real-ip, …). Without it, the
+ *    last X-Forwarded-For entry: the address the proxy saw. Earlier entries (and X-Real-IP) may come from the client.
+ */
 export function clientIp(req: Request) {
   if (!trustProxy()) {
     if (!warned && process.env.NODE_ENV === "production") {
@@ -27,12 +33,11 @@ export function clientIp(req: Request) {
     }
     return "untrusted";
   }
-  return (
-    req.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip")?.trim() ||
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "unknown"
-  );
+  const h = req.headers;
+  if (process.env.VERCEL) return h.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip")?.trim() || "unknown";
+  const named = process.env.CLIENT_IP_HEADER?.trim();
+  if (named) return h.get(named)?.split(",")[0]?.trim() || "unknown";
+  return h.get("x-forwarded-for")?.split(",").pop()?.trim() || "unknown";
 }
 
 const hostOf = (v: string | null) => {

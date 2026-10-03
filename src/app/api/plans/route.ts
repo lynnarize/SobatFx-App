@@ -13,6 +13,8 @@ export async function GET() {
     transferEnabled: transferConfigured() && !demoMode(),
     qrisSoon: qrisComingSoon() && !demoMode(),
     saleTiers: saleTiers(),
+    // Only whether a code exists, never the code itself: the page shows the voucher field when true.
+    vouchers: { pro: Boolean(process.env.PRO_VOUCHER_CODE?.trim()), ultimate: Boolean(process.env.ULTIMATE_VOUCHER_CODE?.trim()) },
     demo: demoMode(),
     plans: {
       free: { priceIdr: 0, ...tierLimit("free") },

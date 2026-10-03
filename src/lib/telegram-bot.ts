@@ -101,6 +101,11 @@ export async function handleUpdate(u: Update) {
   const text = m.text?.trim() ?? "";
   const admin = isAdmin(m.from?.id);
 
+  // Anyone may ask: it only reveals their own id, and tells the owner exactly what to put in TELEGRAM_ADMIN_IDS.
+  if (/^\/myid(@\w+)?$/i.test(text)) {
+    const id = m.from?.id ?? m.chat.id;
+    return send(m.chat.id, `Telegram id: <code>${id}</code>\n${admin ? "✅ Admin on this server" : `Not an admin on this server (${adminIds().length} admin id(s) configured)`}`);
+  }
   if (admin && text.startsWith("/")) return handleAdminCommand(m, text);
   if (/^\/start(@\w+)?(\s|$)/i.test(text)) return handleStart(m, argOf(text));
   if (m.photo || m.document) return handleProof(m);
@@ -111,6 +116,7 @@ export async function handleUpdate(u: Update) {
 const ADMIN_HELP = [
   "<b>SobatFX payments</b>",
   "/pending — transfers waiting for you",
+  "/myid — your Telegram id (works for anyone)",
   "/status <code>email</code> — a customer's plan",
   "/grant <code>email pro|ultra [days]</code> — activate a plan by hand",
   "/revenue <code>[YYYY-MM]</code> — sales this month (or that month)",

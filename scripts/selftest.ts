@@ -1,5 +1,6 @@
 /** Offline checks for the pure logic (no API keys needed):  npm test */
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { contextBlock, systemPrompt } from "../src/lib/ai/prompt";
@@ -12,11 +13,11 @@ import { emptyData, loadDoc, saveDoc, syncDataSchema } from "../src/lib/sync-sto
 import { acquireSlot, clientIp, hit, isSameOrigin, readJson } from "../src/lib/guard";
 import { parseLooseJson } from "../src/lib/loose-json";
 import { instrumentName, translate } from "../src/lib/i18n";
-import { createQrisOrder, createTransferOrder, displayStatus, getOrder, syncOrder } from "../src/lib/payments";
+import { createQrisOrder, createTransferOrder, displayStatus, getOrder, syncOrder, validNotificationSignature, voucherPrice } from "../src/lib/payments";
 import { indexSale, monthOf, salesCsv, salesFor, summarize } from "../src/lib/revenue";
 import { handleUpdate, notifyClaim, parseGrant, type Update } from "../src/lib/telegram-bot";
-import { validWebhookSecret } from "../src/lib/telegram";
-import { effectiveTier, getUser, grantTier } from "../src/lib/users";
+import { adminIds, validWebhookSecret } from "../src/lib/telegram";
+import { consumeDemoCap, effectiveTier, getUser, grantTier, refundDemoCap } from "../src/lib/users";
 import { kv } from "../src/lib/store";
 import { pipValueUsd, positionSize, withCurrency, DEFAULT_RISK } from "../src/lib/market/risk";
 import { daysLeft, prune, slim, titleFrom, upsert } from "../src/lib/chat-history";
@@ -614,15 +615,21 @@ const post = (headers: Record<string, string>, body = "{}") => new Request("http
 
 test("client IP: forwarded headers only behind a trusted proxy, platform header first", () => {
   const env = process.env as Record<string, string | undefined>;
-  const vercel = env.VERCEL;
+  const { VERCEL: vercel, TRUST_PROXY: trust, CLIENT_IP_HEADER: named } = env;
   try {
     delete env.VERCEL;
     assert.equal(clientIp(post({ "x-forwarded-for": "6.6.6.6" })), "untrusted", "off Vercel a forged X-Forwarded-For gets no bucket of its own");
+    env.TRUST_PROXY = "true";
+    assert.equal(clientIp(post({ "x-real-ip": "6.6.6.6", "x-forwarded-for": "7.7.7.7, 1.2.3.4" })), "1.2.3.4", "own proxy: the entry it appended, not client-sent ones");
+    env.CLIENT_IP_HEADER = "cf-connecting-ip";
+    assert.equal(clientIp(post({ "cf-connecting-ip": "9.9.9.9", "x-forwarded-for": "1.2.3.4" })), "9.9.9.9");
+    delete env.TRUST_PROXY;
+    delete env.CLIENT_IP_HEADER;
     env.VERCEL = "1";
     assert.equal(clientIp(post({ "x-vercel-forwarded-for": "1.1.1.1", "x-forwarded-for": "6.6.6.6" })), "1.1.1.1");
     assert.equal(clientIp(post({})), "unknown");
   } finally {
-    env.VERCEL = vercel;
+    Object.assign(env, { VERCEL: vercel, TRUST_PROXY: trust, CLIENT_IP_HEADER: named });
   }
 });
 test("same-origin check: own site passes, other sites fail, missing Origin fails in production", () => {
@@ -688,6 +695,39 @@ void (async () => {
     assert.ok(again);
     assert.equal(await acquireSlot(email), null);
   });
+  await atest("Midtrans signature: only the exact SHA-512 passes, odd input never throws, closed without a server key", async () => {
+    const env = process.env as Record<string, string | undefined>;
+    const key = env.MIDTRANS_SERVER_KEY;
+    const n = { order_id: "SFX-PRO-SIG-1", status_code: "200", gross_amount: "99000.00" };
+    const sign = (k: string) => crypto.createHash("sha512").update(n.order_id + n.status_code + n.gross_amount + k).digest("hex");
+    try {
+      env.MIDTRANS_SERVER_KEY = "srv";
+      assert.ok(validNotificationSignature({ ...n, signature_key: sign("srv") }));
+      assert.ok(!validNotificationSignature({ ...n, signature_key: sign("other") }));
+      assert.ok(!validNotificationSignature({ ...n, signature_key: "é".repeat(128) }), "same length in chars, longer in bytes");
+      assert.ok(!validNotificationSignature({ ...n, signature_key: { length: 128 } as unknown as string }));
+      delete env.MIDTRANS_SERVER_KEY;
+      assert.ok(!validNotificationSignature({ ...n, signature_key: sign("") }), "no server key: nothing is valid");
+    } finally {
+      env.MIDTRANS_SERVER_KEY = key;
+    }
+  });
+  await atest("demo: Ultra has its own smaller daily budget inside the overall one", async () => {
+    const env = process.env as Record<string, string | undefined>;
+    const caps = { DEMO_DAILY_CAP: env.DEMO_DAILY_CAP, DEMO_ULTIMATE_DAILY_CAP: env.DEMO_ULTIMATE_DAILY_CAP };
+    try {
+      Object.assign(env, { DEMO_DAILY_CAP: "3", DEMO_ULTIMATE_DAILY_CAP: "2" });
+      assert.equal(await consumeDemoCap("ultimate"), null);
+      assert.equal(await consumeDemoCap("ultimate"), null);
+      assert.equal(await consumeDemoCap("ultimate"), "ultimate");
+      assert.equal(await consumeDemoCap("pro"), null, "a refused Ultra request doesn't use up the overall budget");
+      await refundDemoCap("ultimate");
+      assert.equal(await consumeDemoCap("ultimate"), null, "a refund gives the Ultra slot back");
+      assert.equal(await consumeDemoCap("free"), "all");
+    } finally {
+      Object.assign(env, caps);
+    }
+  });
   await atest("payments: grants are once per order, the pay lock is exclusive and expires, odd ids are never looked up", async () => {
     const mail = `grant-${Date.now()}@test.com`;
     const once = (await grantTier(mail, "pro", 30, "SFX-PRO-TEST-1")).proUntil!;
@@ -705,6 +745,32 @@ void (async () => {
     assert.deepEqual(await readJson(post({}, JSON.stringify({ a: 1 })), 100), { ok: true, data: { a: 1 } });
     assert.deepEqual(await readJson(post({}, "x".repeat(500)), 100), { ok: false, status: 413 });
     assert.deepEqual(await readJson(post({}, "{nope"), 100), { ok: false, status: 400 });
+  });
+  await atest("vouchers: env codes, case-insensitive, per plan; transfer orders priced by the voucher", async () => {
+    const env = process.env as Record<string, string | undefined>;
+    const saved = { ...env };
+    Object.assign(env, { PRO_PRICE_IDR: "149000", PRO_VOUCHER_CODE: "firmantuhepaly, other", PRO_VOUCHER_PRICE_IDR: "129000", ULTIMATE_VOUCHER_CODE: "", BANK_NAME: "BCA", BANK_ACCOUNT_NUMBER: "123", BANK_ACCOUNT_HOLDER: "SobatFX" });
+    try {
+      assert.equal(voucherPrice("pro", " FirmanTuhePaly "), 129000);
+      assert.equal(voucherPrice("pro", "other"), 129000);
+      assert.equal(voucherPrice("pro", "nope"), null);
+      assert.equal(voucherPrice("pro", ""), null);
+      assert.equal(voucherPrice("pro", 123), null);
+      assert.equal(voucherPrice("ultimate", "firmantuhepaly"), null, "a Pro code doesn't discount Ultra");
+      env.PRO_VOUCHER_PRICE_IDR = "200000";
+      assert.equal(voucherPrice("pro", "firmantuhepaly"), null, "a 'voucher' above the normal price is ignored");
+      env.PRO_VOUCHER_PRICE_IDR = "129000";
+      const buyer = `voucher-${Date.now()}@test.com`;
+      const full = await createTransferOrder(buyer, "pro");
+      assert.ok(full.amount > 149000 && full.amount < 150000 && !full.voucher);
+      const cheap = await createTransferOrder(buyer, "pro", "FIRMANTUHEPALY");
+      assert.notEqual(cheap.id, full.id, "adding a voucher gets a new order at the new price");
+      assert.ok(cheap.amount > 129000 && cheap.amount < 130000 && cheap.voucher === "firmantuhepaly");
+      assert.equal((await createTransferOrder(buyer, "pro", "firmantuhepaly")).id, cheap.id, "same voucher reuses the open order");
+    } finally {
+      for (const k of Object.keys(env)) if (!(k in saved)) delete env[k];
+      Object.assign(env, saved);
+    }
   });
   await atest("bank transfer: unique amounts, owner-only approval, single grant, confirmed /grant", async () => {
     const env = process.env as Record<string, string | undefined>;
@@ -741,6 +807,7 @@ void (async () => {
       await handleUpdate(tap(111, `no:${order.id}`));
       assert.equal((await getUser(buyer))!.proUntil, until, "second approval and late reject change nothing");
       assert.equal((await getOrder(order.id))!.status, "paid");
+      assert.equal(await kv.get(`transferamt:${order.amount}`), null, "an approved order gives its amount back");
 
       const msg = (from: number, text: string): Update => ({ message: { message_id: 9, from: { id: from }, chat: { id: from, type: "private" }, text } });
       const target = `target-${tag}@test.com`;
@@ -764,6 +831,9 @@ void (async () => {
       assert.deepEqual(copies.map((c) => c.body.chat_id), [111, 222]);
       assert.ok(JSON.stringify(copies[0].body.reply_markup).includes(`ok:${second.id}`));
       assert.ok((await getOrder(second.id))!.claimedAt, "sending proof marks the order as claimed");
+      assert.equal(await kv.get(`transferamt:${second.amount}`), second.id, "a claimed order keeps its amount until the owner decides");
+      await handleUpdate(tap(111, `no:${second.id}`));
+      assert.equal(await kv.get(`transferamt:${second.amount}`), null, "a rejected order gives its amount back");
       assert.equal(effectiveTier(await getUser(`proof-${tag}@test.com`)).tier, "free", "proof alone never activates");
     } finally {
       globalThis.fetch = realFetch;
@@ -832,6 +902,29 @@ void (async () => {
       assert.equal(monthOf(Date.UTC(2026, 8, 30, 17, 30)), "2026-10", "00:30 WIB on 1 Oct is October");
     } finally {
       globalThis.fetch = realFetch;
+    }
+  });
+  await atest("admin ids: any separator, junk ignored", async () => {
+    const env = process.env as Record<string, string | undefined>;
+    const before = env.TELEGRAM_ADMIN_IDS;
+    env.TELEGRAM_ADMIN_IDS = "111, 222;333\n444 @budi 555";
+    assert.deepEqual(adminIds(), [111, 222, 333, 444, 555]);
+    env.TELEGRAM_ADMIN_IDS = "111";
+    const sent: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_u: string, init: { body: string }) => {
+      sent.push(JSON.parse(init.body).text);
+      return Response.json({ ok: true, result: {} });
+    }) as unknown as typeof fetch;
+    try {
+      const ask = (id: number) => handleUpdate({ message: { message_id: 1, from: { id }, chat: { id, type: "private" }, text: "/myid" } });
+      await ask(111);
+      await ask(999);
+      assert.ok(sent[0].includes("<code>111</code>") && sent[0].includes("✅ Admin"));
+      assert.ok(sent[1].includes("<code>999</code>") && sent[1].includes("Not an admin") && sent[1].includes("1 admin id"));
+    } finally {
+      globalThis.fetch = realFetch;
+      env.TELEGRAM_ADMIN_IDS = before;
     }
   });
   await atest("webhook secret: exact match only, and closed when unset", async () => {

@@ -104,21 +104,33 @@ export async function consumeUsage(email: string, tier: Tier) {
   return { ok: true as const, used, limit, period };
 }
 
-/** Demo only: one shared daily budget across all demo visitors (DEMO_DAILY_CAP, default 300). */
-export async function consumeDemoCap() {
-  const cap = Number(process.env.DEMO_DAILY_CAP || 300);
-  const key = `demo:all:${wibDay()}`;
-  const n = await kv.incr(key);
-  if (n === 1) await kv.expire(key, 2 * 86_400);
-  if (n > cap) {
-    await kv.decr(key);
-    return false;
-  }
-  return true;
+/**
+ * Demo only: daily budgets shared by all demo visitors. DEMO_DAILY_CAP (default 300) counts every request; Ultra also
+ * counts against DEMO_ULTIMATE_DAILY_CAP (default 30), because anyone can pick the most expensive model in the demo.
+ */
+function demoCaps(tier: Tier): { name: "all" | "ultimate"; key: string; cap: number }[] {
+  const all = { name: "all" as const, key: `demo:all:${wibDay()}`, cap: Number(process.env.DEMO_DAILY_CAP || 300) };
+  if (tier !== "ultimate") return [all];
+  return [all, { name: "ultimate", key: `demo:ultimate:${wibDay()}`, cap: Number(process.env.DEMO_ULTIMATE_DAILY_CAP || 30) }];
 }
 
-export async function refundDemoCap() {
-  await kv.decr(`demo:all:${wibDay()}`);
+/** Takes one request from the demo budgets. Returns null when allowed, else which budget is used up. */
+export async function consumeDemoCap(tier: Tier): Promise<"all" | "ultimate" | null> {
+  const taken: string[] = [];
+  for (const { name, key, cap } of demoCaps(tier)) {
+    const n = await kv.incr(key);
+    if (n === 1) await kv.expire(key, 2 * 86_400);
+    if (n > cap) {
+      await Promise.all([key, ...taken].map((k) => kv.decr(k)));
+      return name;
+    }
+    taken.push(key);
+  }
+  return null;
+}
+
+export async function refundDemoCap(tier: Tier) {
+  await Promise.all(demoCaps(tier).map(({ key }) => kv.decr(key)));
 }
 
 export async function refundUsage(email: string, tier: Tier) {

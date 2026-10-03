@@ -64,7 +64,7 @@ function compatConfig(tier: "free" | "pro"): CompatConfig {
       label: "free",
       apiKey: process.env.OPENROUTER_API_KEY,
       baseURL: OPENROUTER,
-      model: process.env.FREE_MODEL || "inclusionai/ling-3.0-flash-fin:free",
+      model: process.env.FREE_MODEL || "inclusionai/ling-3.1-flash",
       fallbacks: list(process.env.FREE_FALLBACK_MODELS),
       reasoning: process.env.FREE_REASONING,
       maxTokens: 2000,

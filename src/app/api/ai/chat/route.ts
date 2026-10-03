@@ -137,15 +137,16 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
   if (tier === "free" && ctx) delete ctx.journal;
   // Lot sizing is Pro/Ultra too: without the pip value the context carries no step-by-step lot recipe.
   if (tier === "free" && ctx?.risk) delete ctx.risk.pipValue;
-  if (demoMode() && !(await consumeDemoCap())) return Response.json({ error: t("srv.demoCap"), code: "limit" }, { status: 429 });
+  const demoCapped = demoMode() ? await consumeDemoCap(tier) : null;
+  if (demoCapped) return Response.json({ error: t(demoCapped === "ultimate" ? "srv.demoUltraCap" : "srv.demoCap"), code: "limit" }, { status: 429 });
   // App-wide daily ceiling (AI_GLOBAL_DAILY_CAP), a backstop if many accounts are farmed or leaked.
   if (!(await consumeGlobalCap())) {
-    if (demoMode()) await refundDemoCap();
+    if (demoMode()) await refundDemoCap(tier);
     return Response.json({ error: t("srv.globalCap") }, { status: 503 });
   }
   const usage = await consumeUsage(email, tier);
   if (!usage.ok) {
-    if (demoMode()) await refundDemoCap();
+    if (demoMode()) await refundDemoCap(tier);
     await refundGlobalCap();
     return Response.json(
       { error: t(tier !== "free" ? "srv.dailyLimit" : usage.period === "daily" ? "srv.freeLimitToday" : "srv.freeLimit", { n: usage.limit }), code: "limit" },
@@ -249,7 +250,7 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
         if (sent === 0) {
           await refundUsage(email, tier);
           await refundGlobalCap();
-          if (demoMode()) await refundDemoCap();
+          if (demoMode()) await refundDemoCap(tier);
         }
         const msg = e instanceof ProviderError ? t(`srv.${e.code}`, { tier: TIER_INFO[tier].label }) : t("srv.unavailable");
         if (!(e instanceof ProviderError)) console.error("[ai] unexpected", e);

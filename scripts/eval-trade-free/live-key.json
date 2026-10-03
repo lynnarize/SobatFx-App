@@ -1,0 +1,22 @@
+{
+ "L1-gold-analysis": {
+  "A": "inclusionai/ling-3.0-flash-fin",
+  "B": "inclusionai/ling-3.1-flash"
+ },
+ "L2-eurusd-plan": {
+  "A": "inclusionai/ling-3.1-flash",
+  "B": "inclusionai/ling-3.0-flash-fin"
+ },
+ "L3-btc-scalp": {
+  "A": "inclusionai/ling-3.1-flash",
+  "B": "inclusionai/ling-3.0-flash-fin"
+ },
+ "L4-usdjpy-review": {
+  "A": "inclusionai/ling-3.1-flash",
+  "B": "inclusionai/ling-3.0-flash-fin"
+ },
+ "L5-gold-revenge": {
+  "A": "inclusionai/ling-3.0-flash-fin",
+  "B": "inclusionai/ling-3.1-flash"
+ }
+}

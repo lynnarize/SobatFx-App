@@ -5,6 +5,9 @@
  *   npm run eval:trade                       build fresh scenarios, run all models × arms
  *   npm run eval:trade -- --reuse            rerun on the saved scenarios (same inputs → comparable)
  *   npm run eval:trade -- --models a,b --arms pipvalue
+ *   npm run eval:trade -- --tier free --reuse --models a,b --arms worked
+ *                                            free tier: free system prompt, no higher-timeframe block,
+ *                                            2000-token cap; reuses the Pro scenarios, writes eval-trade-free/
  *
  * Design
  *  - Scenarios are frozen app contexts (built exactly like AIPanel.buildContext + the chat route: candles,
@@ -40,11 +43,13 @@ import { DEFAULT_RISK, pipValueUsd, positionSize, type RiskSettings } from "../s
 import { type Candle, type Interval, getInstrument, intervalSec, newsKeys } from "../src/lib/market/symbols";
 import { newsDigest } from "../src/lib/news";
 
-const OUT = join(process.cwd(), "scripts", "eval-trade");
 const arg = (name: string) => {
   const i = process.argv.indexOf(`--${name}`);
   return i > 0 ? process.argv[i + 1] : undefined;
 };
+const TIER = (arg("tier") ?? "pro") as "free" | "pro";
+const OUT = join(process.cwd(), "scripts", TIER === "free" ? "eval-trade-free" : "eval-trade");
+const MAX_TOKENS = TIER === "free" ? 2000 : 2500;
 const MODELS = (arg("models") ?? "thinkingmachines/inkling,qwen/qwen3.8-flash,nvidia/nemotron-3.5-lightning").split(",");
 const ARMS = (arg("arms") ?? "baseline,pipvalue,worked").split(",") as Arm[];
 const CONCURRENCY = Number(arg("concurrency") ?? 6);
@@ -189,7 +194,7 @@ async function stream(model: string, messages: { role: string; content: string }
     const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": process.env.NEXTAUTH_URL ?? "https://sobatfx.app", "X-Title": "SobatFX" },
-      body: JSON.stringify({ model, messages, stream: true, max_tokens: 2500, reasoning: { enabled: false }, stream_options: { include_usage: true } }),
+      body: JSON.stringify({ model, messages, stream: true, max_tokens: MAX_TOKENS, reasoning: { enabled: false }, stream_options: { include_usage: true } }),
       signal: AbortSignal.timeout(180_000),
     });
     if (!r.ok || !r.body) {
@@ -236,8 +241,8 @@ function mentionsLevels(text: string, last?: number) {
 }
 
 async function answer(model: string, s: Scenario, arm: Arm) {
-  const system = systemPrompt("pro");
-  const user = userTurn(s, arm);
+  const system = systemPrompt(TIER);
+  const user = userTurn(TIER === "free" ? { ...s, mtf: "" } : s, arm);
   const first = await stream(model, [{ role: "system", content: system }, { role: "user", content: user }]);
   let text = first.text;
   let followUp: Call | null = null;
@@ -389,7 +394,7 @@ function report(scn: Scenario[], rows: Row[]) {
   const of = (m: string, a: Arm, kind?: Scenario["kind"]) => rows.filter((r) => r.model === m && r.arm === a && (!kind || r.kind === kind));
   const nBt = scn.filter((s) => s.kind === "backtest").length;
   L.push(`# SobatFX trade-analysis eval — ${new Date().toISOString().slice(0, 16)}Z`, "");
-  L.push(`${scn.length} scenarios (${scn.length - nBt} live, ${nBt} backtest) × ${models.length} models × ${arms.length} arms = ${rows.length} answers. Risk: $1000, 1%. Pro system prompt. 95% CIs: Wilson (rates), bootstrap (means).`, "");
+  L.push(`${scn.length} scenarios (${scn.length - nBt} live, ${nBt} backtest) × ${models.length} models × ${arms.length} arms = ${rows.length} answers. Risk: $1000, 1%. ${TIER === "free" ? "Free" : "Pro"} system prompt. 95% CIs: Wilson (rates), bootstrap (means).`, "");
 
   L.push("## 1. Delivery: speed, cost, format", "", "| model | arm | errors | avg s | first token s | avg cost $ | words (≤250) | disclaimer shown | self-talk | follow-up call needed |", "|---|---|---|---|---|---|---|---|---|---|");
   for (const m of models) for (const a of arms) {
@@ -481,7 +486,10 @@ function blindPacket(scn: Scenario[], rows: Row[]) {
 async function main() {
   mkdirSync(OUT, { recursive: true });
   const file = join(OUT, "scenarios.json");
-  const scn: Scenario[] = (process.argv.includes("--reuse") || process.argv.includes("--rescore")) && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : await buildScenarios();
+  // Free runs start from the Pro scenarios so both tiers answer the same frozen inputs.
+  const proFile = join(process.cwd(), "scripts", "eval-trade", "scenarios.json");
+  const src = TIER === "free" && !existsSync(file) && existsSync(proFile) ? proFile : file;
+  const scn: Scenario[] = (process.argv.includes("--reuse") || process.argv.includes("--rescore")) && existsSync(src) ? JSON.parse(readFileSync(src, "utf8")) : await buildScenarios();
   writeFileSync(file, JSON.stringify(scn));
   console.log(`${scn.length} scenarios · models ${MODELS.join(", ")} · arms ${ARMS.join(", ")}`);
   const jobs = scn.flatMap((s) => MODELS.flatMap((model) => ARMS.map((arm) => async (): Promise<Row> => {
