@@ -13,6 +13,7 @@ import {
 } from "lightweight-charts";
 import {
   ArrowUpRight,
+  ChevronsRight,
   Eraser,
   GitCommitHorizontal,
   Layers,
@@ -21,6 +22,7 @@ import {
   MousePointer2,
   MoveUpRight,
   Redo2,
+  RotateCcw,
   Rows3,
   Ruler,
   SeparatorVertical,
@@ -76,6 +78,10 @@ function roundPrices(d: Drawing, digits: number): Drawing {
   return { ...d, price: r(d.price)!, price2: r(d.price2), price3: r(d.price3), stopPrice: r(d.stopPrice), targetPrice: r(d.targetPrice) };
 }
 
+/** Bars shown by default / after "reset view", plus empty bars of room on the right. */
+const VIEW_BARS = 150;
+const RIGHT_OFFSET = 8;
+
 const toBar = (c: Candle) => ({ time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close });
 const volBar = (c: Candle) => ({ time: c.time as UTCTimestamp, value: c.volume ?? 0, color: c.close >= c.open ? "rgba(34,179,107,0.25)" : "rgba(224,69,60,0.25)" });
 
@@ -106,6 +112,8 @@ export function TradingChart() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showEma, setShowEma] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Latest candle scrolled out of view → offer a way back.
+  const [lost, setLost] = useState(false);
   const status = useSyncExternalStore(
     useCallback((cb: () => void) => (venue ? subscribeStatus(venue, cb) : () => {}), [venue]),
     () => (venue ? feedStatus(venue) : ("offline" as FeedStatus)),
@@ -152,7 +160,7 @@ export function TradingChart() {
       autoSize: true,
       // Colours are set by the theme effect below.
       layout: { fontFamily: "var(--font-geist-mono), ui-monospace, monospace", attributionLogo: true },
-      timeScale: { timeVisible: true, rightOffset: 8 },
+      timeScale: { timeVisible: true, rightOffset: RIGHT_OFFSET },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: "rgba(212,182,124,0.4)", labelBackgroundColor: "#b8944f" }, horzLine: { color: "rgba(212,182,124,0.4)", labelBackgroundColor: "#b8944f" } },
       localization: { timeFormatter: (t: number) => new Date(t * 1000).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) },
     });
@@ -187,6 +195,12 @@ export function TradingChart() {
     });
     managerRef.current = manager;
 
+    const onRange = (r: { from: number; to: number } | null) => {
+      const n = candlesRef.current.length;
+      setLost(!!r && n > 0 && (r.to < n - 1 || r.from > n - 1));
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
+
     // Screenshot for the AI: drawings are series primitives, so they're in the canvas already.
     registerChart({
       screenshot() {
@@ -207,6 +221,7 @@ export function TradingChart() {
     });
 
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
       manager.destroy();
       managerRef.current = null;
       chart.remove();
@@ -288,6 +303,15 @@ export function TradingChart() {
     onModify: modifyPaperTrade,
   });
 
+  /** Back to the default view: latest candles in frame, price axis auto-fitted. */
+  const resetView = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const n = candlesRef.current.length;
+    chart.priceScale("right").applyOptions({ autoScale: true });
+    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - VIEW_BARS), to: n + RIGHT_OFFSET });
+  }, []);
+
   // ── history over REST, then live ticks over WebSocket ──
   useEffect(() => {
     let stop = false;
@@ -318,7 +342,7 @@ export function TradingChart() {
           s.setData(next.map(toBar));
           volRef.current?.setData(next.some((c) => c.volume) ? next.map(volBar) : []);
           s.applyOptions({ priceFormat: { type: "price", precision: inst.digits, minMove: 1 / 10 ** inst.digits } });
-          chartRef.current?.timeScale().setVisibleLogicalRange({ from: Math.max(0, next.length - 150), to: next.length + 8 });
+          resetView();
           first = false;
         } else {
           // Reconcile closed bars from the exchange; keep the live-built forming bar.
@@ -412,7 +436,7 @@ export function TradingChart() {
       cancelAnimationFrame(raf);
       unsub();
     };
-  }, [symbol, interval, inst, barSec, venue, setCandles, setSource]);
+  }, [symbol, interval, inst, barSec, venue, setCandles, setSource, resetView]);
 
   // No ticks for 30s (weekend / quiet market) → say so instead of "LIVE".
   useEffect(() => {
@@ -446,6 +470,9 @@ export function TradingChart() {
         <button className="icon-btn" title="EMA 20 / 50" aria-label={t("chart.emaToggle")} aria-pressed={showEma} onClick={() => setShowEma((v) => !v)}>
           <GitCommitHorizontal size={16} />
         </button>
+        <button className="icon-btn" title={t("chart.resetView")} aria-label={t("chart.resetView")} onClick={resetView}>
+          <RotateCcw size={16} />
+        </button>
         <button className="icon-btn" title={t("chart.undo")} aria-label={t("chart.undo")} onClick={undo}>
           <Undo2 size={16} />
         </button>
@@ -475,6 +502,15 @@ export function TradingChart() {
       <div className="relative h-[440px] w-full overflow-hidden rounded-xl border border-line bg-panel @2xl:h-[520px]">
         <div ref={box} data-label={inst.label} className="absolute inset-0 z-0" />
         <LiveBadge status={venue ? status : "offline"} stale={stale} />
+        {lost && (
+          <button
+            className="absolute bottom-9 left-1/2 z-10 flex h-7 -translate-x-1/2 items-center gap-1 rounded-md border border-gold-deep/40 bg-panel-2/90 px-2 text-[11px] font-semibold text-gold shadow-sm backdrop-blur hover:bg-gold-soft"
+            title={t("chart.resetView")}
+            onClick={resetView}
+          >
+            {t("chart.toLatest")} <ChevronsRight size={14} />
+          </button>
+        )}
         {!candles.length && error === null && <div className="absolute inset-0 z-20 grid animate-pulse place-items-center text-sm text-muted">{t("chart.loading", { pair: inst.label })}</div>}
         {error !== null && <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-lg border border-down/40 bg-panel-2 px-3 py-1.5 text-xs text-down">{error || t("chart.dataError")}</div>}
       </div>
