@@ -5,29 +5,66 @@ import { useEffect, useState } from "react";
 import { eventSpec } from "@/lib/event-specs";
 import { type Instrument, getInstrument } from "@/lib/market/symbols";
 import type { CalendarEvent, Headline } from "@/lib/news";
+import { HOT_AFTER_MS, anyHot, isHot, msUntilHot } from "@/lib/release-window";
 import { pairDirection } from "@/lib/usual-effect";
 import { useT } from "./i18n";
 import { useNow, useWs } from "./workspace";
 
-let cache: { at: number; data: { calendar: CalendarEvent[]; headlines: Headline[] } } | null = null;
+type NewsData = { calendar: CalendarEvent[]; headlines: Headline[] };
+let cache: { at: number; data: NewsData } | null = null;
+let inflight: Promise<NewsData> | null = null;
+
+const POLL_MS = 120_000;
+/** While a Medium/High release is within 5 min (or just out, awaiting its actual). */
+const HOT_POLL_MS = 15_000;
+
+const pollMs = (cal: CalendarEvent[]) => {
+  const now = Date.now();
+  if (document.hidden) return POLL_MS;
+  if (anyHot(cal, now)) return HOT_POLL_MS;
+  // Wake up right when the next release window opens rather than up to 2 min late.
+  return Math.max(1000, Math.min(POLL_MS, msUntilHot(cal, now)));
+};
+
+function fetchNews() {
+  return (inflight ??= fetch("/api/news")
+    .then((r) => {
+      if (!r.ok) throw new Error(`news ${r.status}`);
+      return r.json() as Promise<NewsData>;
+    })
+    .then((d) => ((cache = { at: Date.now(), data: d }), d))
+    .finally(() => (inflight = null)));
+}
 
 export function useNews() {
   const [data, setData] = useState(cache?.data ?? null);
   const [error, setError] = useState(false);
   useEffect(() => {
-    const load = () => {
-      if (cache && Date.now() - cache.at < 120_000) return setData(cache.data);
-      fetch("/api/news")
-        .then((r) => r.json())
-        .then((d) => {
-          cache = { at: Date.now(), data: d };
-          setData(d);
-        })
-        .catch(() => setError(true));
+    let alive = true;
+    let timer = 0;
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(load, pollMs(cache?.data.calendar ?? []));
     };
+    const load = () => {
+      // Another mounted useNews (or a recent page) may have just fetched.
+      if (cache && Date.now() - cache.at < pollMs(cache.data.calendar) - 1000) {
+        setData(cache.data);
+        return schedule();
+      }
+      fetchNews()
+        .then((d) => alive && (setData(d), setError(false)))
+        .catch(() => alive && setError(true))
+        .finally(() => alive && schedule());
+    };
+    const onVisible = () => !document.hidden && load();
     load();
-    const t = window.setInterval(load, 180_000);
-    return () => window.clearInterval(t);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
   return { data, error };
 }
@@ -46,6 +83,12 @@ export function fmtClock(iso: string, locale: string) {
   return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 }
 
+/** Live countdown "m:ss" for the last minutes before a release. */
+const countdown = (ms: number) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
 export function relTime(iso: string, t: T) {
   const s = (Date.now() - Date.parse(iso)) / 1000;
   if (s < 0) {
@@ -55,17 +98,45 @@ export function relTime(iso: string, t: T) {
   return s < 3600 ? t("time.agoM", { n: Math.max(1, Math.round(s / 60)) }) : s < 86400 ? t("time.agoH", { n: Math.round(s / 3600) }) : t("time.agoD", { n: Math.round(s / 86400) });
 }
 
+const actualColor = (better: CalendarEvent["better"]) => (better === 1 ? "text-up" : better === -1 ? "text-down" : "text-ink");
+
+/** Column labels matching EventRow's layout; render it at the same width as the list so the container breakpoints line up. */
+export function EventHeader() {
+  const { t } = useT();
+  return (
+    <div className="@container">
+      <div className="flex items-center gap-3 border-b border-line pb-1.5 text-[11px] font-semibold text-muted">
+        <span className="w-2 shrink-0" />
+        <span className="w-10 shrink-0">{t("news.colTime")}</span>
+        <span className="w-10 shrink-0 truncate">{t("news.colCur")}</span>
+        <span className="min-w-0 flex-1 truncate">{t("news.colEvent")}</span>
+        <span className="hidden w-16 shrink-0 justify-end whitespace-nowrap @lg:flex">{t("news.colActual")}</span>
+        <span className="hidden w-16 shrink-0 justify-end whitespace-nowrap @lg:flex">{t("news.colForecast")}</span>
+        <span className="hidden w-16 shrink-0 justify-end whitespace-nowrap @lg:flex">{t("news.colPrevious")}</span>
+        <span className="w-3.5 shrink-0" />
+      </div>
+    </div>
+  );
+}
+
 export function EventRow({ e }: { e: CalendarEvent }) {
   const { t, locale } = useT();
-  const now = useNow();
+  // Tick every second only for rows close to release; the rest stay on the shared 30 s clock.
+  const slowNow = useNow();
+  const t0 = Date.parse(e.time);
+  const near = t0 - slowNow < 6 * 60_000 && t0 - slowNow > -HOT_AFTER_MS;
+  const fastNow = useNow(near ? 1000 : 3_600_000);
+  const now = near ? Math.max(fastNow, slowNow) : slowNow;
   const [open, setOpen] = useState(false);
-  const past = Date.parse(e.time) < now;
+  const past = t0 < now;
+  const hot = isHot(e, now);
+  const awaiting = hot && past && Boolean(e.forecast || e.previous);
   const spec = eventSpec(e.title, e.currency);
   return (
     <li className="@container py-2 text-sm">
       <button
         type="button"
-        className={`flex w-full items-center gap-3 text-left ${past && !open ? "opacity-50" : ""} ${spec ? "cursor-pointer hover:text-gold" : "cursor-default"}`}
+        className={`flex w-full items-center gap-3 text-left ${past && !open && !awaiting ? "opacity-50" : ""} ${spec ? "cursor-pointer hover:text-gold" : "cursor-default"}`}
         onClick={() => spec && setOpen((o) => !o)}
         aria-expanded={spec ? open : undefined}
         title={spec ? t(open ? "spec.hide" : "spec.show") : undefined}
@@ -74,13 +145,28 @@ export function EventRow({ e }: { e: CalendarEvent }) {
         <span className={`h-2 w-2 shrink-0 rounded-full ${impactColor(e.impact)}`} title={t("news.impactTitle", { x: t(`impact.${e.impact}`) })} />
         <time dateTime={e.time} className="num w-10 shrink-0 text-xs font-semibold text-ink" title={fmtWhen(e.time, locale)}>{fmtClock(e.time, locale)}</time>
         <span className="num w-10 shrink-0 text-xs font-semibold text-ink-2">{e.currency}</span>
-        <span className="min-w-0 flex-1 truncate">{e.title}</span>
-        <span className="num hidden shrink-0 text-xs text-muted @xl:inline">
-          {e.actual && <b className={`font-semibold ${e.better === 1 ? "text-up" : e.better === -1 ? "text-down" : "text-ink-2"}`}>A {e.actual}{(e.forecast || e.previous) && " · "}</b>}
-          {e.forecast && `F ${e.forecast}`}{e.previous && ` · P ${e.previous}`}
+        <span className="min-w-0 flex-1">
+          <span className="block">{e.title}</span>
+          <span className="num block text-[11px] text-muted">
+            {hot && !past ? (
+              <b className="font-semibold text-gold" title={fmtWhen(e.time, locale)}>{t("time.inClock", { t: countdown(t0 - now) })}</b>
+            ) : awaiting ? (
+              <span className="animate-pulse text-gold">{t("news.awaitingActual")}</span>
+            ) : (
+              <span title={fmtWhen(e.time, locale)}>{relTime(e.time, t)}</span>
+            )}
+            {/* Narrow containers: figures inline here instead of in columns. */}
+            <span className="@lg:hidden">
+              {e.actual && <b className={`font-semibold ${actualColor(e.better)}`}> · A {e.actual}</b>}
+              {e.forecast && ` · F ${e.forecast}`}
+              {e.previous && ` · P ${e.previous}`}
+            </span>
+          </span>
         </span>
-        <span className="num w-16 shrink-0 text-right text-xs text-muted @xl:w-24" title={fmtWhen(e.time, locale)}>{relTime(e.time, t)}</span>
-        {spec && <ChevronDown size={14} className={`shrink-0 text-muted transition-transform ${open ? "rotate-180" : ""}`} />}
+        <span className={`num hidden w-16 shrink-0 text-right text-xs font-semibold @lg:block ${actualColor(e.better)}`}>{e.actual}</span>
+        <span className="num hidden w-16 shrink-0 text-right text-xs text-ink-2 @lg:block">{e.forecast}</span>
+        <span className="num hidden w-16 shrink-0 text-right text-xs text-ink-2 @lg:block">{e.previous}</span>
+        <span className="w-3.5 shrink-0">{spec && <ChevronDown size={14} className={`text-muted transition-transform ${open ? "rotate-180" : ""}`} />}</span>
       </button>
       {open && spec && <EventDetail e={e} spec={spec} />}
     </li>

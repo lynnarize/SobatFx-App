@@ -7,7 +7,7 @@ import { SymbolBadge } from "@/components/AppShell";
 import { TradingChart } from "@/components/chart/TradingChart";
 import { OrderTicket } from "@/components/trade/OrderTicket";
 import { OpenPositions } from "@/components/trade/Positions";
-import { EventRow, HeadlineRow, useNews } from "@/components/news";
+import { EventHeader, EventRow, HeadlineRow, useNews } from "@/components/news";
 import { useT } from "@/components/i18n";
 import { FlashNumber } from "@/components/FlashNumber";
 import { fmtPrice, useNow, useWs } from "@/components/workspace";
@@ -261,11 +261,14 @@ function MarketOverview() {
           {!data ? (
             <p className="py-6 text-sm text-muted">{t("app.loading")}</p>
           ) : events.length ? (
-            <ul className="divide-y divide-line">
-              {events.map((e) => (
-                <EventRow key={e.id} e={e} />
-              ))}
-            </ul>
+            <>
+              <EventHeader />
+              <ul className="divide-y divide-line">
+                {events.map((e) => (
+                  <EventRow key={e.id} e={e} />
+                ))}
+              </ul>
+            </>
           ) : (
             <p className="py-6 text-sm text-muted">{t("ov.noEvents")}</p>
           )}

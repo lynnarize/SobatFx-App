@@ -2,7 +2,7 @@
 
 import { Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
-import { EventRow, HeadlineRow, useNews } from "@/components/news";
+import { EventHeader, EventRow, HeadlineRow, useNews } from "@/components/news";
 import { useT } from "@/components/i18n";
 import { useNow, useWs } from "@/components/workspace";
 
@@ -85,16 +85,19 @@ export default function NewsPage() {
           ) : byDay.length === 0 ? (
             <p className="py-8 text-sm text-muted">{t("news.noEvents")}</p>
           ) : (
-            byDay.map(([day, list]) => (
-              <div key={day} className="mb-4">
-                <div className="sticky top-0 bg-panel-2 py-1 text-xs font-semibold uppercase tracking-wide text-gold">{day}</div>
-                <ul className="divide-y divide-line">
-                  {list.map((e) => (
-                    <EventRow key={e.id} e={e} />
-                  ))}
-                </ul>
-              </div>
-            ))
+            <>
+              <EventHeader />
+              {byDay.map(([day, list]) => (
+                <div key={day} className="mt-2 mb-4">
+                  <div className="sticky top-0 bg-panel-2 py-1 text-xs font-semibold uppercase tracking-wide text-gold">{day}</div>
+                  <ul className="divide-y divide-line">
+                    {list.map((e) => (
+                      <EventRow key={e.id} e={e} />
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </>
           )}
           <p className="mt-2 text-[11px] text-muted">{t("news.calSource")}</p>
         </section>

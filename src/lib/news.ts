@@ -5,11 +5,14 @@ import { loadHistories, loadPreviews, measureReaction, saveHistory, savePreviews
 import { INSTRUMENTS } from "./market/symbols";
 import { type HistRec, type Outlook, type Reaction, leadTitles, outlookFor, summarizeReactions } from "./outlook";
 import { PREVIEW_WINDOW, matchRelease, parsePreview, parseRelease } from "./releases";
+import { releaseTtl } from "./release-window";
 import { type UsualEffect, pairDirection, parseValue, surprise, usualEffect } from "./usual-effect";
 
-// Economic calendar: Forex Factory weekly JSON (free, rate-limited → cached 30 min). It has no
-// actuals, so those are read from release headlines in the RSS feeds (src/lib/releases.ts).
+// Economic calendar: Forex Factory weekly JSON (free, rate-limited → cached 5 min, 2 min around a
+// release, last good copy kept on failure). It has no actuals, so those are read from release
+// headlines in the RSS feeds (src/lib/releases.ts).
 // Headlines: public RSS feeds, tagged with the currencies/assets they likely move.
+// Around a Medium/High release (src/lib/release-window.ts) every layer refreshes faster.
 
 export type Impact = "High" | "Medium" | "Low" | "Holiday";
 
@@ -45,8 +48,11 @@ export interface Headline {
 
 const UA = "Mozilla/5.0 (compatible; SobatFX/1.0)";
 
+/** Latest calendar this instance has built; drives the release-aware cache TTLs below. */
+let lastCal: CalendarEvent[] | undefined;
+
 function ffCalendar() {
-  return cached("calendar", 1800, async () => {
+  return cached("calendar", () => releaseTtl(lastCal, 300, 120), async () => {
     const r = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", { headers: { "user-agent": UA }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
     if (!r.ok) throw new Error(`calendar ${r.status}`);
     const rows: { title: string; country: string; date: string; impact: Impact; forecast: string; previous: string }[] = await r.json();
@@ -60,7 +66,7 @@ function ffCalendar() {
       previous: e.previous,
       effect: usualEffect(e.title),
     })) satisfies CalendarEvent[];
-  });
+  }, { stale: true });
 }
 
 const isNumeric = (e: CalendarEvent) => (e.effect === "higher" || e.effect === "lower") && Boolean(e.forecast || e.previous);
@@ -171,8 +177,8 @@ async function withOutlook(cal: CalendarEvent[], previews: Record<string, { v: n
 
 /** FF calendar with released actuals read from headlines, pre-release leans and typical reactions. */
 export function getCalendar() {
-  // 2 min: headlines refresh every 5 min anyway, and each run costs a few Redis commands.
-  return cached("calendar+actuals", 120, async () => {
+  // 2 min (15 s around a release): each run costs a few Redis commands.
+  return cached("calendar+actuals", () => releaseTtl(lastCal, 120, 15), async () => {
     const ff = await ffCalendar();
     const heads = await getHeadlines().catch(() => [] as Headline[]);
     const warn = (what: string) => (e: unknown) => (console.warn(`[news] ${what}`, (e as Error).message), {});
@@ -184,7 +190,8 @@ export function getCalendar() {
       const v = fromHeads[eventKey(e)];
       return v == null ? e : { ...e, actual: display(e, v), better: surprise(e.title, v, parseValue(e.forecast) ?? undefined, parseValue(e.previous) ?? undefined) };
     });
-    return withOutlook(cal, previews).catch((e) => (console.warn("[news] outlook", (e as Error).message), cal));
+    lastCal = await withOutlook(cal, previews).catch((e) => (console.warn("[news] outlook", (e as Error).message), cal));
+    return lastCal;
   });
 }
 
@@ -235,7 +242,7 @@ async function feed(source: string, url: string): Promise<Headline[]> {
 }
 
 export function getHeadlines() {
-  return cached("headlines", 300, async () => {
+  return cached("headlines", () => releaseTtl(lastCal, 300, 30), async () => {
     const all = await Promise.allSettled(FEEDS.map((f) => feed(f.source, f.url)));
     const seen = new Set<string>();
     return all
