@@ -1,4 +1,4 @@
-import { kv } from "./store";
+import { kv, withLock } from "./store";
 import type { PaidTier, Tier } from "./tiers";
 
 export interface UserRecord {
@@ -31,11 +31,21 @@ export async function getUser(email: string) {
   return kv.get<UserRecord>(userKey(email));
 }
 
+// Every write of a user record takes this lock: grants and sign-ins each rewrite the whole record, and an
+// unserialized pair would silently drop the other's change (a paid extension, or a just-granted plan).
+const userLock = (email: string) => `userlock:${email.toLowerCase()}`;
+
 export async function upsertUser(u: { email: string; name?: string | null; image?: string | null }) {
-  const existing = await getUser(u.email);
-  const rec: UserRecord = { ...existing, email: u.email.toLowerCase(), name: u.name, image: u.image, createdAt: existing?.createdAt ?? Date.now() };
-  await kv.set(userKey(u.email), rec);
-  return rec;
+  const done = await withLock(userLock(u.email), 15, 5000, async () => {
+    const existing = await getUser(u.email);
+    const rec: UserRecord = { ...existing, email: u.email.toLowerCase(), name: u.name, image: u.image, createdAt: existing?.createdAt ?? Date.now() };
+    await kv.set(userKey(u.email), rec);
+    return rec;
+  });
+  if (done) return done.value;
+  // Still busy: skip the name/image refresh rather than block the sign-in.
+  console.warn("[users] record busy, profile not refreshed");
+  return (await getUser(u.email)) ?? { email: u.email.toLowerCase(), createdAt: Date.now() };
 }
 
 /** Local testing only: DEV_TIER=pro|ultimate sets the tier of the dev login (needs DEV_SKIP_AUTH, never in production). */
@@ -58,14 +68,19 @@ export function effectiveTier(u: UserRecord | null): { tier: Tier; until?: numbe
 
 /** Extends the tier from max(now, current expiry). With `orderId`, once per order: the extension and the id are saved together. */
 export async function grantTier(email: string, tier: PaidTier, days: number, orderId?: string) {
-  const u = (await getUser(email)) ?? (await upsertUser({ email }));
-  if (orderId && u.grants?.includes(orderId)) return u;
-  const field = tier === "ultimate" ? "ultimateUntil" : "proUntil";
-  const from = Math.max(Date.now(), u[field] ?? 0);
-  u[field] = from + days * 86_400_000;
-  if (orderId) u.grants = [...(u.grants ?? []), orderId].slice(-50);
-  await kv.set(userKey(email), u);
-  return u;
+  const done = await withLock(userLock(email), 15, 10_000, async () => {
+    const u: UserRecord = (await getUser(email)) ?? { email: email.toLowerCase(), createdAt: Date.now() };
+    if (orderId && u.grants?.includes(orderId)) return u;
+    const field = tier === "ultimate" ? "ultimateUntil" : "proUntil";
+    const from = Math.max(Date.now(), u[field] ?? 0);
+    u[field] = from + days * 86_400_000;
+    if (orderId) u.grants = [...(u.grants ?? []), orderId].slice(-50);
+    await kv.set(userKey(email), u);
+    return u;
+  });
+  // Throwing lets the caller retry (webhook redelivery, status poll, admin tap); the order id keeps it to one extension.
+  if (!done) throw new Error("User record busy, grant not applied");
+  return done.value;
 }
 
 // ─── Usage limits ────────────────────────────────────────────────────────

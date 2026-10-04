@@ -12,6 +12,6 @@ export const TIER_INFO: Record<Tier, { label: string }> = {
   ultimate: { label: "Ultra" },
 };
 
-export function isPaidTier(t: string): t is PaidTier {
+export function isPaidTier(t: unknown): t is PaidTier {
   return t === "pro" || t === "ultimate";
 }

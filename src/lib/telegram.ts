@@ -20,8 +20,11 @@ export const telegramConfigured = () => Boolean(token() && process.env.TELEGRAM_
 /** Telegram sends the secret we registered with setWebhook in this header. Fails closed when no secret is set. */
 export function validWebhookSecret(header: string | null) {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
-  if (!secret || !header || header.length !== secret.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(header), Buffer.from(secret));
+  if (!secret || !header) return false;
+  // Compare byte lengths, not string lengths: a non-ASCII header has more bytes than chars, and timingSafeEqual throws on a mismatch.
+  const a = Buffer.from(header);
+  const b = Buffer.from(secret);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 /** Escapes user-controlled text (emails, names) for parse_mode HTML. */
@@ -35,6 +38,7 @@ export async function tg<T = unknown>(method: string, body: Record<string, unkno
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       cache: "no-store",
+      signal: AbortSignal.timeout(10_000), // a hung Telegram must not hang the request that called it
     });
     const j = (await r.json()) as { ok: boolean; result?: T; description?: string };
     if (!j.ok) {

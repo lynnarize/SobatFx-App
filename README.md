@@ -114,7 +114,7 @@ Cheapest checks run first:
 | 3 | Per-IP rate limit, in Redis (`AI_IP_PER_MIN`) | bursts from one address, across all serverless instances |
 | 4 | Per-user rate limit (`AI_USER_PER_MIN`) and one reply at a time per user | one account firing many requests at once |
 | 5 | Body cap (3 MB, checked while reading) and the input caps in the zod schema | huge payloads |
-| 6 | Per-tier daily quota (`FREE_REQUEST_LIMIT`, `PRO_DAILY_LIMIT`, `ULTIMATE_DAILY_LIMIT`) | one account running up its own plan |
+| 6 | Per-tier daily quota (`FREE_REQUEST_LIMIT`, `PRO_DAILY_LIMIT`, `ULTIMATE_DAILY_LIMIT`; admins and testers get `STAFF_DAILY_LIMIT`) | one account running up its own plan |
 | 7 | App-wide daily cap (`AI_GLOBAL_DAILY_CAP`) | many farmed or leaked accounts together |
 
 Per-IP limits only trust forwarded headers on Vercel or with `TRUST_PROXY=true`. Behind your own proxy, set `CLIENT_IP_HEADER`
@@ -152,7 +152,8 @@ Keys never reach the browser. Still set a **monthly spend limit** on the OpenRou
    In the GitHub repo → Settings → Secrets and variables → Actions, add the variable `APP_URL=https://YOUR-DOMAIN` and the secret
    `CRON_SECRET` (same value). Test it with Actions → News history → Run workflow.
 8. Optional: `TWELVEDATA_API_KEY`, used only as a backup history source if Kraken is unreachable (not live).
-9. Optional: `ADMIN_EMAILS=you@gmail.com` gives you Ultra for testing.
+9. Optional: `ADMIN_EMAILS=you@gmail.com` gives you Ultra for testing. `TESTER_EMAILS` (comma-separated) keeps each tester's own tier.
+   Both lists get `STAFF_DAILY_LIMIT` AI requests a day (default 80) instead of their tier's quota.
 
 The payment flow: user picks a plan → server creates a Midtrans QRIS charge → QR shown → user pays with any e-wallet or
 m-banking app → Midtrans webhook (signature-verified) **and** client polling both re-check the status with Midtrans → tier is extended.
@@ -178,6 +179,39 @@ paid in (Jakarta time, `revenue:YYYY-MM` in Redis). Both QRIS and approved trans
 
 QRIS amounts are gross: the Midtrans fee comes off at settlement, so reconcile against the Midtrans dashboard (Transactions → settlement)
 and transfers against your bank statement. Sales paid before the sales book existed are not listed; use those two sources for them.
+
+## Partner API: support/resistance for the Telegram signal builder
+
+`POST /api/partner/levels` gives the SOBAT FX Telegram signal builder (`Mini-Signal-SobatFX`, e.g. on `signal.sobatfx.com`)
+recent candles plus AI-marked support and resistance. The builder draws the chart itself and posts it to the channel.
+It is server to server only: the builder's server holds the key, and browsers never call this route.
+
+```http
+POST /api/partner/levels
+Authorization: Bearer <one of PARTNER_API_KEYS>
+Content-Type: application/json
+
+{ "symbol": "XAUUSD", "interval": "1h", "side": "BUY", "entryLow": 4139, "entryHigh": 4143, "sl": 4133 }
+```
+
+The response contains `symbol`, `interval`, `digits` and `lastPrice`. It also has `candles` (the last 120 closed candles, `[time, o, h, l, c]`),
+`levels` (`[{ type: "support"|"resistance", price, strength 1–3, label }]`, at most 3 per side, nearest first), and `note` (one sentence in Indonesian).
+Finally, `source` is `"ai"` or `"auto"`. `interval` is `15m`, `1h`, `4h` or `1d`. The side, entry and SL are optional; when given, the AI also looks at the levels around the stop and the targets.
+
+How it works (`src/lib/levels.ts`):
+1. Swing highs and lows from the last 200 candles are clustered into levels.
+2. These go to the AI as hints, together with the candles and the signal. The AI answers in JSON.
+3. Levels on the wrong side of price or far off the chart are dropped, timestamps are stripped from labels, and the note goes through the usual model-name filter.
+4. If the AI is off, over its limit or fails, the clustered swing levels are returned with `source: "auto"`. The call still succeeds.
+
+| Env | Default | |
+|---|---|---|
+| `PARTNER_API_KEYS` | unset (route returns 404) | Comma-separated keys, at least 24 characters each (`openssl rand -hex 32`). |
+| `PARTNER_AI_TIER` | `pro` | Model tier used: `free`, `pro`, `ultimate` or `off` (swing levels only). |
+| `PARTNER_PER_MIN` | `10` | Requests per minute per key. |
+| `PARTNER_DAILY_LIMIT` | `200` | AI calls per key per day. Past this, requests get swing levels only. |
+
+AI calls also count toward `AI_GLOBAL_DAILY_CAP`. Offline tests: `npx tsx scripts/selftest-levels.ts`.
 
 ## Market data (live)
 

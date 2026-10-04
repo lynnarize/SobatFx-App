@@ -138,3 +138,21 @@ if (!(url && token) && process.env.NODE_ENV === "production" && process.env.NEXT
 }
 
 export const kv: KV = url && token ? redisKV(url, token) : memoryKV();
+
+/**
+ * Runs `fn` while holding `key`, waiting up to `waitMs` for it. The lock expires after `ttlSec` (a crashed holder can't
+ * strand it) and is released only while this caller still holds it. Returns null if it couldn't be taken in time.
+ */
+export async function withLock<T>(key: string, ttlSec: number, waitMs: number, fn: () => Promise<T>): Promise<{ value: T } | null> {
+  const holder = crypto.randomUUID();
+  const until = Date.now() + waitMs;
+  while (!(await kv.lock(key, ttlSec, holder))) {
+    if (Date.now() >= until) return null;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  try {
+    return { value: await fn() };
+  } finally {
+    if ((await kv.get<string>(key).catch(() => null)) === holder) await kv.del(key).catch(() => {});
+  }
+}

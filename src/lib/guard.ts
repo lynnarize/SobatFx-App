@@ -129,15 +129,20 @@ const LOCK_TTL = 330; // a little over the route's maxDuration (300s), so a cras
 /** Takes the user's single AI slot. Returns a release function, or null if a reply is already being generated. */
 export async function acquireSlot(email: string): Promise<(() => Promise<void>) | null> {
   const key = `ai:busy:${email}`;
+  let counted = false;
   try {
     const n = await kv.incr(key);
+    counted = true;
     await kv.expire(key, LOCK_TTL);
     if (n > 1) {
+      counted = false;
       await kv.decr(key);
       return null;
     }
   } catch (e) {
     console.error("[guard] slot store unavailable", (e as Error).message);
+    // Take back an increment whose TTL may not have been set, or the user stays "busy" until the next attempt sets one.
+    if (counted) await kv.decr(key).catch(() => {});
     return async () => {};
   }
   let released = false;
@@ -196,4 +201,10 @@ export async function readJson(req: Request, max: number): Promise<{ ok: true; d
   } catch {
     return { ok: false, status: 400 };
   }
+}
+
+/** A small JSON object body, for routes that check each field themselves: a bad, oversized or non-object body (`null`, `[]`, `1`) reads as {}. */
+export async function readObject(req: Request, max = 4096): Promise<Record<string, unknown>> {
+  const r = await readJson(req, max);
+  return r.ok && r.data !== null && typeof r.data === "object" && !Array.isArray(r.data) ? (r.data as Record<string, unknown>) : {};
 }

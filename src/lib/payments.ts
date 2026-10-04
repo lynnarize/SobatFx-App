@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { announceSale, indexSale } from "./revenue";
-import { kv } from "./store";
+import { kv, withLock } from "./store";
 import { telegramConfigured } from "./telegram";
 import { grantTier } from "./users";
 import { isPaidTier, type PaidTier } from "./tiers";
@@ -96,6 +96,7 @@ export async function createQrisOrder(email: string, tier: PaidTier, voucherCode
       qris: { acquirer: "gopay" },
       custom_expiry: { expiry_duration: 15, unit: "minute" },
     }),
+    signal: AbortSignal.timeout(15_000),
   });
   const j = await r.json();
   if (!r.ok || !["200", "201"].includes(String(j.status_code)) || !j.qr_string) {
@@ -136,9 +137,8 @@ export async function getOrder(id: string) {
  * and grantTier() remembers the order id, so that retry never extends the plan twice.
  */
 async function markPaid(order: Order): Promise<Order> {
-  const lock = `paylock:${order.id}`;
-  if (!(await kv.lock(lock, 120))) return (await getOrder(order.id)) ?? order; // someone else is granting it right now
-  try {
+  // Waits out a racing grant or claim, then works on a fresh copy of the order.
+  const done = await withLock(`paylock:${order.id}`, 120, 5000, async () => {
     const fresh = (await getOrder(order.id)) ?? order;
     if (fresh.status === "paid") return fresh; // finished by a racing caller that held a stale copy
     const paidAt = Date.now();
@@ -149,9 +149,8 @@ async function markPaid(order: Order): Promise<Order> {
     await kv.set(orderKey(fresh.id), fresh);
     await announceSale(fresh);
     return fresh;
-  } finally {
-    await kv.del(lock).catch(() => {});
-  }
+  });
+  return done?.value ?? (await getOrder(order.id)) ?? order; // still busy: someone else is granting it right now
 }
 
 /** Asks Midtrans for the authoritative status and applies it (idempotent). */
@@ -159,7 +158,11 @@ export async function syncOrder(id: string): Promise<Order | null> {
   const order = await getOrder(id);
   if (!order || order.status !== "pending") return order;
   if (order.method === "transfer" || order.method === "manual") return order; // not a Midtrans order: only an admin can settle it
-  const r = await fetch(`${base()}/v2/${encodeURIComponent(id)}/status`, { headers: { Authorization: auth(), Accept: "application/json" }, cache: "no-store" });
+  const r = await fetch(`${base()}/v2/${encodeURIComponent(id)}/status`, {
+    headers: { Authorization: auth(), Accept: "application/json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
+  });
   const j = await r.json();
   const st: string = j.transaction_status;
   const amountOk = Math.round(Number(j.gross_amount)) === order.amount;
@@ -252,13 +255,20 @@ export async function createTransferOrder(email: string, tier: PaidTier, voucher
   return order;
 }
 
-/** "I've paid" / proof sent. Returns false if it was already claimed, so the owner is only pinged once per order. */
-export async function claimTransfer(order: Order): Promise<boolean> {
-  if (order.claimedAt) return false;
-  order.claimedAt = Date.now();
-  await kv.set(orderKey(order.id), order, { ex: 90 * 86400 });
-  await kv.lpushCapped("transfer:claims", order.id, 50);
-  await holdAmount(order);
+/** "I've paid" / proof sent. Returns false if it was already claimed (or is no longer open), so the owner is only pinged once per order. */
+export async function claimTransfer(id: string): Promise<boolean> {
+  // Under the order's pay lock and on a fresh copy, so an approval racing this is never overwritten with a stale "pending".
+  const done = await withLock(`paylock:${id}`, 30, 5000, async () => {
+    const o = await getOrder(id);
+    if (!o || o.method !== "transfer" || o.status !== "pending" || o.claimedAt) return null;
+    o.claimedAt = Date.now();
+    await kv.set(orderKey(id), o, { ex: 90 * 86400 });
+    return o;
+  });
+  const claimed = done?.value;
+  if (!claimed) return false;
+  await kv.lpushCapped("transfer:claims", claimed.id, 50);
+  await holdAmount(claimed);
   return true;
 }
 

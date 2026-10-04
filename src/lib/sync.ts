@@ -35,10 +35,12 @@ const stage = (t: PaperTrade) => (t.closedAt != null ? 2 : t.pending ? 0 : 1);
  */
 export function mergeData(mine: SyncData, theirs: SyncData): SyncData {
   const drawings: Record<string, Drawing[]> = {};
+  // Own keys only: a symbol key like "constructor" would otherwise read Object.prototype's function, not a list.
+  const listOf = (d: SyncData["drawings"], sym: string) => (Object.hasOwn(d, sym) ? d[sym] : []);
   for (const sym of new Set([...Object.keys(theirs.drawings), ...Object.keys(mine.drawings)])) {
-    const mineList = mine.drawings[sym] ?? [];
+    const mineList = listOf(mine.drawings, sym);
     const mineIds = new Set(mineList.map((d) => d.id));
-    drawings[sym] = [...(theirs.drawings[sym] ?? []).filter((d) => !mineIds.has(d.id)), ...mineList];
+    drawings[sym] = [...listOf(theirs.drawings, sym).filter((d) => !mineIds.has(d.id)), ...mineList];
   }
   const theirTrades = new Map(theirs.paper.trades.map((t) => [t.id, t]));
   const trades = mine.paper.trades.map((t) => {

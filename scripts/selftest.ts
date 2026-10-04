@@ -10,10 +10,10 @@ import { asksForDrawing, extractDrawings } from "../src/lib/drawings";
 import { checkPlans, lotsInText } from "../src/lib/ai/lot-check";
 import { fingerprint, hasContent, mergeData, type SyncData } from "../src/lib/sync";
 import { emptyData, loadDoc, saveDoc, syncDataSchema } from "../src/lib/sync-store";
-import { acquireSlot, clientIp, hit, isSameOrigin, readJson } from "../src/lib/guard";
+import { acquireSlot, clientIp, hit, isSameOrigin, readJson, readObject } from "../src/lib/guard";
 import { parseLooseJson } from "../src/lib/loose-json";
 import { instrumentName, translate } from "../src/lib/i18n";
-import { createQrisOrder, createTransferOrder, displayStatus, getOrder, syncOrder, validNotificationSignature, voucherPrice } from "../src/lib/payments";
+import { approveTransfer, claimTransfer, createQrisOrder, createTransferOrder, displayStatus, getOrder, syncOrder, validNotificationSignature, voucherPrice } from "../src/lib/payments";
 import { indexSale, monthOf, salesCsv, salesFor, summarize } from "../src/lib/revenue";
 import { handleUpdate, notifyClaim, parseGrant, type Update } from "../src/lib/telegram-bot";
 import { adminIds, validWebhookSecret } from "../src/lib/telegram";
@@ -221,6 +221,15 @@ test("draw block survives common model JSON slips", () => {
   assert.deepEqual(r.drawings.map((d) => d.price), [4160.5, 4146.6]);
   assert.equal(r.unreadable, false);
   assert.equal(parseLooseJson("not json at all"), undefined);
+});
+
+test("loose JSON repairs leave string contents alone", () => {
+  assert.deepEqual(parseLooseJson('{"text":"a /* keep */ b",}'), { text: "a /* keep */ b" });
+  assert.deepEqual(parseLooseJson('{"label":"down,] up",}'), { label: "down,] up" });
+  assert.deepEqual(parseLooseJson('{"text":"see my//note","price":1,}'), { text: "see my//note", price: 1 });
+  assert.deepEqual(parseLooseJson('{"label":"wait // do not enter", // real comment\n"x":1,}'), { label: "wait // do not enter", x: 1 });
+  assert.deepEqual(parseLooseJson('{"note":"at: 4,160, then","p":4,160.5,}'), { note: "at: 4,160, then", p: 4160.5 });
+  assert.deepEqual(parseLooseJson('{"q":"say \\"hi\\" // x",/* c */}'), { q: 'say "hi" // x' });
 });
 
 // ── Demo trading ──
@@ -657,6 +666,9 @@ void (async () => {
     assert.equal(m.drawings.EURUSD.length, 1);
     assert.deepEqual(m.paper.trades.map((t) => t.id), ["t1", "t2", "t3"]);
     assert.equal(m.paper.trades[0].closedAt, 9, "the closed copy beats the open one");
+    const odd: SyncData = { drawings: { constructor: [line("e", 6)], toString: [line("f", 7)] }, paper: phone.paper };
+    const merged = mergeData(pc, odd);
+    assert.deepEqual(["constructor", "toString"].map((k) => merged.drawings[k].map((d) => d.id)), [["e"], ["f"]], "a symbol named like an Object method merges as a list");
     assert.equal(m.paper.startBalance, 10_000);
     assert.notEqual(fingerprint(pc), fingerprint(phone));
     assert.equal(fingerprint(pc), fingerprint(JSON.parse(JSON.stringify(pc))), "same content, same fingerprint after a storage round trip");
@@ -694,6 +706,19 @@ void (async () => {
     const again = await acquireSlot(email);
     assert.ok(again);
     assert.equal(await acquireSlot(email), null);
+    await again!();
+
+    const flaky = `slot-flaky-${Date.now()}@test`;
+    const expire = kv.expire;
+    kv.expire = async () => {
+      throw new Error("store down");
+    };
+    try {
+      assert.ok(await acquireSlot(flaky), "a store error fails open");
+    } finally {
+      kv.expire = expire;
+    }
+    assert.ok(await acquireSlot(flaky), "and leaves no count behind to lock the user out");
   });
   await atest("Midtrans signature: only the exact SHA-512 passes, odd input never throws, closed without a server key", async () => {
     const env = process.env as Record<string, string | undefined>;
@@ -733,6 +758,11 @@ void (async () => {
     const once = (await grantTier(mail, "pro", 30, "SFX-PRO-TEST-1")).proUntil!;
     assert.equal((await grantTier(mail, "pro", 30, "SFX-PRO-TEST-1")).proUntil, once, "a retried grant for the same order doesn't extend again");
     assert.equal((await grantTier(mail, "pro", 30, "SFX-PRO-TEST-2")).proUntil, once + 30 * 86_400_000);
+    const racer = `race-${Date.now()}@test.com`;
+    await Promise.all([grantTier(racer, "pro", 30, "SFX-PRO-RACE-1"), grantTier(racer, "pro", 30, "SFX-PRO-RACE-2"), grantTier(racer, "ultimate", 10, "SFX-ULT-RACE-3")]);
+    const raced = (await getUser(racer))!;
+    assert.ok(raced.proUntil! > Date.now() + 59 * 86_400_000, "two grants at once both extend the plan");
+    assert.ok(raced.ultimateUntil! > Date.now() + 9 * 86_400_000 && raced.grants!.length === 3, "a racing grant of another tier isn't dropped");
     const k = `paylock:test-${Date.now()}`;
     assert.ok(await kv.lock(k, 1));
     assert.ok(!(await kv.lock(k, 1)), "held");
@@ -745,6 +775,8 @@ void (async () => {
     assert.deepEqual(await readJson(post({}, JSON.stringify({ a: 1 })), 100), { ok: true, data: { a: 1 } });
     assert.deepEqual(await readJson(post({}, "x".repeat(500)), 100), { ok: false, status: 413 });
     assert.deepEqual(await readJson(post({}, "{nope"), 100), { ok: false, status: 400 });
+    for (const body of ["null", "[]", "1", '"x"', "{nope", "x".repeat(5000)]) assert.deepEqual(await readObject(post({}, body)), {}, `body ${body.slice(0, 8)} reads as {}`);
+    assert.deepEqual(await readObject(post({}, '{"tier":"pro"}')), { tier: "pro" });
   });
   await atest("vouchers: env codes, case-insensitive, per plan; transfer orders priced by the voucher", async () => {
     const env = process.env as Record<string, string | undefined>;
@@ -832,6 +864,14 @@ void (async () => {
       assert.ok(JSON.stringify(copies[0].body.reply_markup).includes(`ok:${second.id}`));
       assert.ok((await getOrder(second.id))!.claimedAt, "sending proof marks the order as claimed");
       assert.equal(await kv.get(`transferamt:${second.amount}`), second.id, "a claimed order keeps its amount until the owner decides");
+
+      const third = await createTransferOrder(`claim-race-${tag}@test.com`, "pro");
+      const claims = await Promise.all([claimTransfer(third.id), claimTransfer(third.id)]);
+      assert.deepEqual(claims.sort(), [false, true], "two claims at once: only one counts");
+      const fourth = await createTransferOrder(`late-claim-${tag}@test.com`, "pro");
+      assert.ok((await approveTransfer(fourth.id))!.granted);
+      assert.equal(await claimTransfer(fourth.id), false, "a claim after approval is refused");
+      assert.equal((await getOrder(fourth.id))!.status, "paid", "and never reverts the order to pending");
       await handleUpdate(tap(111, `no:${second.id}`));
       assert.equal(await kv.get(`transferamt:${second.amount}`), null, "a rejected order gives its amount back");
       assert.equal(effectiveTier(await getUser(`proof-${tag}@test.com`)).tier, "free", "proof alone never activates");
@@ -932,6 +972,7 @@ void (async () => {
     env.TELEGRAM_WEBHOOK_SECRET = "s3cret";
     assert.ok(validWebhookSecret("s3cret"));
     assert.ok(!validWebhookSecret("s3cre7") && !validWebhookSecret("s3cret!") && !validWebhookSecret(null));
+    assert.ok(!validWebhookSecret("\u00e93cre"), "same char count but more bytes is refused, not thrown");
     env.TELEGRAM_WEBHOOK_SECRET = "";
     assert.ok(!validWebhookSecret("") && !validWebhookSecret("s3cret"));
   });

@@ -181,7 +181,11 @@ async function handleCallback(q: CallbackQuery) {
   if (action === "ok") {
     const r = await approveTransfer(arg);
     if (!r) return done("Order not found.");
-    if (!r.granted) return done(r.order.status === "paid" ? "Already approved." : "This order was already rejected. Use /grant if it should be activated.");
+    if (!r.granted) {
+      if (r.order.status === "paid") return done("Already approved.");
+      if (r.order.status === "failed") return done("This order was already rejected. Use /grant if it should be activated.");
+      return done("This order is busy (a payment is being processed). Tap Approve again in a moment.");
+    }
     await notifyCustomer(r.order, `✅ Pembayaran dikonfirmasi. Paket ${TIER_INFO[r.order.tier].label} aktif selama ${r.order.days} hari. Selamat menganalisis!`);
     return done(`✅ Approved ${r.order.id}\n${TIER_INFO[r.order.tier].label} · ${r.order.days} days for ${r.order.email}`);
   }
@@ -233,7 +237,7 @@ async function handleProof(m: Message) {
   if (!o || o.status !== "pending") return send(m.chat.id, "Buka halaman <b>Paket</b> di SobatFX, buat pesanan transfer, lalu tekan <b>Kirim bukti via Telegram</b> dulu.");
   if (!(await hit(`tgproof:${m.chat.id}`, 5, 3600)).ok) return send(m.chat.id, "Terlalu banyak kiriman. Mohon tunggu sebentar.");
 
-  await claimTransfer(o);
+  await claimTransfer(o.id);
   const caption = orderCard(o, "🧾 Transfer proof");
   const copies = await Promise.all(
     adminIds().map((id) =>
