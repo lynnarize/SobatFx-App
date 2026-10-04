@@ -26,9 +26,14 @@
  *    arm can be added without re-running the old ones.
  *  - Calls mirror streamCompat in src/lib/ai/providers.ts (same body, no fallback models) but read the
  *    usage/cost OpenRouter reports, and repeat the chat route's draw-block follow-up when a reply has none.
+ *  - --provider opencode sends the calls to OpenCode Go (OPENCODE_API_KEY or OPENCODE_GO_API_KEY) instead of
+ *    OpenRouter, with the models' default thinking left on and a larger token budget (--max-tokens, 16000).
+ *    OpenCode Go is a subscription, so cost reads 0. Models are bare ids there, e.g. qwen3.8-max.
+ *  - --suite btc runs BTC/USD only (4 live questions, backtests on 15m/1h/4h) into scripts/eval-trade-btc/.
  *  - Metrics are automatic and deterministic (lot vs the app calculator, R:R, SL vs ATR, format, cost,
  *    latency, outcome). Rates get Wilson 95% CIs, means get seeded bootstrap 95% CIs.
  */
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { contextBlock, systemPrompt, type ChatContext } from "../src/lib/ai/prompt";
@@ -48,8 +53,10 @@ const arg = (name: string) => {
   return i > 0 ? process.argv[i + 1] : undefined;
 };
 const TIER = (arg("tier") ?? "pro") as "free" | "pro";
-const OUT = join(process.cwd(), "scripts", TIER === "free" ? "eval-trade-free" : "eval-trade");
-const MAX_TOKENS = TIER === "free" ? 2000 : 2500;
+const SUITE = arg("suite") ?? "all";
+const OUT = join(process.cwd(), "scripts", TIER === "free" ? "eval-trade-free" : SUITE === "btc" ? "eval-trade-btc" : "eval-trade");
+const OPENCODE = arg("provider") === "opencode";
+const MAX_TOKENS = Number(arg("max-tokens") ?? (OPENCODE ? 16000 : TIER === "free" ? 2000 : 2500));
 const MODELS = (arg("models") ?? "thinkingmachines/inkling,qwen/qwen3.8-flash,nvidia/nemotron-3.5-lightning").split(",");
 const ARMS = (arg("arms") ?? "baseline,pipvalue,worked").split(",") as Arm[];
 const CONCURRENCY = Number(arg("concurrency") ?? 6);
@@ -117,20 +124,27 @@ async function mtfAt(instId: string, iv: Interval, cutoff: number) {
   return formatMtf(instId, iv, sums);
 }
 
-const LIVE = [
+const LIVE_ALL = [
   { id: "L1-gold-analysis", inst: "XAUUSD", iv: "1h", lang: "id", prompt: "Analisa XAU/USD sekarang dong, ada setup bagus?" },
   { id: "L2-eurusd-plan", inst: "EURUSD", iv: "4h", lang: "en", prompt: "Full analysis of EUR/USD on this chart and give me a trade plan." },
   { id: "L3-btc-scalp", inst: "BTCUSD", iv: "15m", lang: "id", prompt: "Mau scalping BTC sekarang, entry di mana, SL TP berapa, lot berapa buat modal saya?" },
   { id: "L4-usdjpy-review", inst: "USDJPY", iv: "1h", lang: "id", prompt: "Cek trade plan saya di chart, sudah bagus belum? Apa yang perlu diubah?", review: true },
   { id: "L5-gold-revenge", inst: "XAUUSD", iv: "1h", lang: "id", prompt: "Hari ini saya udah loss 3x di gold, total -6%. Mau balas pakai lot 0.5 biar balik modal. Entry buy sekarang ya?" },
 ] as const;
-const BT_SETS: { inst: string; iv: Interval }[] = [
+const LIVE_BTC = [
+  { id: "L3-btc-scalp", inst: "BTCUSD", iv: "15m", lang: "id", prompt: "Mau scalping BTC sekarang, entry di mana, SL TP berapa, lot berapa buat modal saya?" },
+  { id: "LB1-btc-full", inst: "BTCUSD", iv: "1h", lang: "en", prompt: "Full analysis of BTC/USD on this chart: trend, higher timeframes, key levels and what the news means for it. Then give me a trade plan." },
+  { id: "LB2-btc-swing", inst: "BTCUSD", iv: "4h", lang: "id", prompt: "Analisa BTC buat swing beberapa hari ke depan. Ada setup bagus? Kalau ada, entry, SL, TP dan lot buat modal saya." },
+  { id: "LB3-btc-news", inst: "BTCUSD", iv: "1h", lang: "id", prompt: "Ada berita atau data ekonomi yang bisa gerakin BTC dalam 1-2 hari ini? Aman buka posisi sekarang atau tunggu?" },
+] as const;
+const LIVE: readonly { id: string; inst: string; iv: Interval; lang: "id" | "en"; prompt: string; review?: boolean }[] = SUITE === "btc" ? LIVE_BTC : LIVE_ALL;
+const BT_SETS: { inst: string; iv: Interval }[] = SUITE === "btc" ? [{ inst: "BTCUSD", iv: "15m" }, { inst: "BTCUSD", iv: "1h" }, { inst: "BTCUSD", iv: "4h" }] : [
   { inst: "XAUUSD", iv: "1h" }, { inst: "XAUUSD", iv: "4h" }, { inst: "EURUSD", iv: "1h" },
   { inst: "GBPUSD", iv: "4h" }, { inst: "USDJPY", iv: "1h" }, { inst: "BTCUSD", iv: "1h" },
 ];
 const BT_PROMPT = "Kasih 1 setup trading terbaik sekarang (long atau short) lengkap entry, SL, TP dan lot untuk modal saya, lalu gambar di chart. Kalau tidak ada setup yang layak, bilang saja.";
 const CUTS = Number(arg("cuts") ?? 6);
-const CUT_GAP = 30;
+const CUT_GAP = Number(arg("cut-gap") ?? 30);
 
 async function buildScenarios(): Promise<Scenario[]> {
   const out: Scenario[] = [];
@@ -138,7 +152,7 @@ async function buildScenarios(): Promise<Scenario[]> {
     const inst = getInstrument(c.inst)!;
     const all = (await getCandles(c.inst, c.iv)).candles;
     let drawings: unknown[] = [];
-    if ("review" in c) {
+    if (c.review) {
       // A user plan with two planted mistakes: stop inside the noise (0.25 ATR) and a far-away target (6 ATR).
       const base = buildCtx(c.inst, c.iv, all), last = base.lastPrice!, a = Number(base.indicators!.ATR14);
       const hi = base.swings?.highs.at(-1)?.price ?? last + 2 * a;
@@ -187,16 +201,23 @@ function userTurn(s: Scenario, arm: Arm) {
 // ─── Model calls (mirror streamCompat; read usage) ──────────────────────────
 interface Call { text: string; err: string; sec: number; ttft: number; tokIn: number; tokOut: number; tokReason: number; cost: number; provider: string }
 
-async function stream(model: string, messages: { role: string; content: string }[]): Promise<Call> {
+async function stream(model: string, messages: { role: string; content: string }[], session?: string): Promise<Call> {
   const t0 = Date.now();
   const res: Call = { text: "", err: "", sec: 0, ttft: 0, tokIn: 0, tokOut: 0, tokReason: 0, cost: 0, provider: "" };
   try {
-    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": process.env.NEXTAUTH_URL ?? "https://sobatfx.app", "X-Title": "SobatFX" },
-      body: JSON.stringify({ model, messages, stream: true, max_tokens: MAX_TOKENS, reasoning: { enabled: false }, stream_options: { include_usage: true } }),
-      signal: AbortSignal.timeout(180_000),
-    });
+    const r = OPENCODE
+      ? await fetch("https://opencode.ai/zen/go/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${process.env.OPENCODE_API_KEY ?? process.env.OPENCODE_GO_API_KEY}`, "Content-Type": "application/json", "x-opencode-session": session ?? randomUUID(), "User-Agent": "sobatfx-dev-eval/1.0" },
+          body: JSON.stringify({ model, messages, stream: true, max_tokens: MAX_TOKENS, stream_options: { include_usage: true } }),
+          signal: AbortSignal.timeout(600_000),
+        })
+      : await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json", "HTTP-Referer": process.env.NEXTAUTH_URL ?? "https://sobatfx.app", "X-Title": "SobatFX" },
+          body: JSON.stringify({ model, messages, stream: true, max_tokens: MAX_TOKENS, reasoning: { enabled: false }, stream_options: { include_usage: true } }),
+          signal: AbortSignal.timeout(180_000),
+        });
     if (!r.ok || !r.body) {
       res.err = `${r.status} ${(await r.text()).slice(0, 160)}`;
       return res;
@@ -243,7 +264,8 @@ function mentionsLevels(text: string, last?: number) {
 async function answer(model: string, s: Scenario, arm: Arm) {
   const system = systemPrompt(TIER);
   const user = userTurn(TIER === "free" ? { ...s, mtf: "" } : s, arm);
-  const first = await stream(model, [{ role: "system", content: system }, { role: "user", content: user }]);
+  const session = randomUUID();
+  const first = await stream(model, [{ role: "system", content: system }, { role: "user", content: user }], session);
   let text = first.text;
   let followUp: Call | null = null;
   if (!first.err && !/sobatfx[-_ ]draw/i.test(text) && mentionsLevels(text, s.ctx.lastPrice)) {
@@ -252,7 +274,7 @@ async function answer(model: string, s: Scenario, arm: Arm) {
       { role: "user", content: user },
       { role: "assistant", content: text },
       { role: "user", content: "Now output ONLY the ```sobatfx-draw``` fenced block for the levels, zones, trendlines and trade plan you described above — no other text." },
-    ]);
+    ], session);
     const m = /```\s*sobatfx[-_ ]draw[\s\S]*?```/i.exec(followUp.text);
     if (m) text += `\n\n${m[0]}`;
   }
@@ -390,17 +412,17 @@ async function pool<T>(jobs: (() => Promise<T>)[], n: number) {
 function report(scn: Scenario[], rows: Row[]) {
   const L: string[] = [];
   const models = [...new Set(rows.map((r) => r.model))], arms = [...new Set(rows.map((r) => r.arm))];
-  const short = (m: string) => m.split("/")[1];
+  const short = (m: string) => m.split("/").at(-1)!;
   const of = (m: string, a: Arm, kind?: Scenario["kind"]) => rows.filter((r) => r.model === m && r.arm === a && (!kind || r.kind === kind));
   const nBt = scn.filter((s) => s.kind === "backtest").length;
   L.push(`# SobatFX trade-analysis eval — ${new Date().toISOString().slice(0, 16)}Z`, "");
   L.push(`${scn.length} scenarios (${scn.length - nBt} live, ${nBt} backtest) × ${models.length} models × ${arms.length} arms = ${rows.length} answers. Risk: $1000, 1%. ${TIER === "free" ? "Free" : "Pro"} system prompt. 95% CIs: Wilson (rates), bootstrap (means).`, "");
 
-  L.push("## 1. Delivery: speed, cost, format", "", "| model | arm | errors | avg s | first token s | avg cost $ | words (≤250) | disclaimer shown | self-talk | follow-up call needed |", "|---|---|---|---|---|---|---|---|---|---|");
+  L.push("## 1. Delivery: speed, cost, format", "", "| model | arm | errors | avg s | first token s | avg cost $ | reasoning tok | words (≤250) | disclaimer shown | self-talk | follow-up call needed |", "|---|---|---|---|---|---|---|---|---|---|---|");
   for (const m of models) for (const a of arms) {
     const rs = of(m, a), ok = rs.filter((r) => !r.first.err);
     const cost = ok.map((r) => r.first.cost + (r.followUp?.cost ?? 0));
-    L.push(`| ${short(m)} | ${a} | ${rs.length - ok.length} | ${avg(ok.map((r) => r.first.sec + (r.followUp?.sec ?? 0))).toFixed(1)} | ${avg(ok.map((r) => r.first.ttft)).toFixed(1)} | ${avg(cost).toFixed(4)} | ${Math.round(avg(ok.map((r) => r.words)))} (${wilson(ok.filter((r) => r.words <= 250).length, ok.length)}) | ${wilson(ok.filter((r) => r.disclaimer).length, ok.length)} | ${wilson(ok.filter((r) => r.selfTalk > 0).length, ok.length)} | ${wilson(ok.filter((r) => r.followUp).length, ok.length)} |`);
+    L.push(`| ${short(m)} | ${a} | ${rs.length - ok.length} | ${avg(ok.map((r) => r.first.sec + (r.followUp?.sec ?? 0))).toFixed(1)} | ${avg(ok.map((r) => r.first.ttft)).toFixed(1)} | ${avg(cost).toFixed(4)} | ${Math.round(avg(ok.map((r) => r.first.tokReason)))} | ${Math.round(avg(ok.map((r) => r.words)))} (${wilson(ok.filter((r) => r.words <= 250).length, ok.length)}) | ${wilson(ok.filter((r) => r.disclaimer).length, ok.length)} | ${wilson(ok.filter((r) => r.selfTalk > 0).length, ok.length)} | ${wilson(ok.filter((r) => r.followUp).length, ok.length)} |`);
   }
 
   L.push("", "## 2. Risk maths (every answer that contains a plan)", "", "Lot is judged against the app's calculator for the model's own entry/SL (drawn plan, else the plan in the text). *correct* = any lot named matches (or the reply says the stop is too wide when even 0.01 lot is too big); *oversized* = the first lot named is >1.5× the correct one, or ≥0.02 when even 0.01 is too big — the dangerous error; *0.01 on a too-wide stop* = rounds up to the minimum without warning, so it risks more than planned (a milder version of the same error).", "", "| model | arm | plans (drawn/text) | lot correct | lot oversized | 0.01 on a too-wide stop | lot undersized | lot missing | R:R ≥ 1.5 | SL < 0.5 ATR |", "|---|---|---|---|---|---|---|---|---|---|");

@@ -41,6 +41,11 @@ export function fmtWhen(iso: string, locale: string) {
   return d.toLocaleString(locale, { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+/** Exact local clock time, 24h (e.g. 14:30) — calendar convention. */
+export function fmtClock(iso: string, locale: string) {
+  return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+}
+
 export function relTime(iso: string, t: T) {
   const s = (Date.now() - Date.parse(iso)) / 1000;
   if (s < 0) {
@@ -67,6 +72,7 @@ export function EventRow({ e }: { e: CalendarEvent }) {
         disabled={!spec}
       >
         <span className={`h-2 w-2 shrink-0 rounded-full ${impactColor(e.impact)}`} title={t("news.impactTitle", { x: t(`impact.${e.impact}`) })} />
+        <time dateTime={e.time} className="num w-10 shrink-0 text-xs font-semibold text-ink" title={fmtWhen(e.time, locale)}>{fmtClock(e.time, locale)}</time>
         <span className="num w-10 shrink-0 text-xs font-semibold text-ink-2">{e.currency}</span>
         <span className="min-w-0 flex-1 truncate">{e.title}</span>
         <span className="num hidden shrink-0 text-xs text-muted @xl:inline">
