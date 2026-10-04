@@ -40,7 +40,7 @@ async function binance(sym: string, iv: Interval, futures = false): Promise<Cand
 }
 
 // OKX bars are aligned to Hong Kong time (UTC+8): fine for 4H, but the day needs the UTC variant.
-const OKX_IV: Record<Interval, string> = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc" };
+const OKX_IV: Record<Interval, string> = { "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1Dutc" };
 async function okx(instId: string, iv: Interval): Promise<Candle[]> {
   const j = await getJSON(`https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${OKX_IV[iv]}&limit=300`);
   if (j.code !== "0") throw new Error(`okx ${j.code} ${j.msg}`);
@@ -57,7 +57,7 @@ async function hyperliquid(coin: string, iv: Interval): Promise<Candle[]> {
   return rows.map((k) => ({ time: Math.floor(k.t / 1000), open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v }));
 }
 
-const KRAKEN_IV: Record<Interval, number> = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
+const KRAKEN_IV: Record<Interval, number> = { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440 };
 async function kraken(pair: string, iv: Interval): Promise<Candle[]> {
   const j = await getJSON(`https://api.kraken.com/0/public/OHLC?pair=${pair}&interval=${KRAKEN_IV[iv]}`);
   if (j.error?.length) throw new Error(`kraken ${j.error.join(",")}`);
@@ -79,7 +79,7 @@ async function krakenCross(a: string, b: string, iv: Interval): Promise<Candle[]
   });
 }
 
-const TWELVE_IV: Record<Interval, string> = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" };
+const TWELVE_IV: Record<Interval, string> = { "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1d": "1day" };
 async function twelve(sym: string, iv: Interval): Promise<Candle[]> {
   const key = process.env.TWELVEDATA_API_KEY;
   const j = await getJSON(
@@ -91,7 +91,7 @@ async function twelve(sym: string, iv: Interval): Promise<Candle[]> {
     .reverse();
 }
 
-const YAHOO: Record<Interval, [string, string]> = { "1m": ["1m", "5d"], "5m": ["5m", "1mo"], "15m": ["15m", "1mo"], "1h": ["60m", "3mo"], "4h": ["60m", "6mo"], "1d": ["1d", "2y"] };
+const YAHOO: Record<Interval, [string, string]> = { "1m": ["1m", "5d"], "5m": ["5m", "1mo"], "15m": ["15m", "1mo"], "30m": ["30m", "1mo"], "1h": ["60m", "3mo"], "4h": ["60m", "6mo"], "1d": ["1d", "2y"] };
 async function yahoo(sym: string, iv: Interval): Promise<Candle[]> {
   const [yi, range] = YAHOO[iv];
   const j = await getJSON(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=${yi}&range=${range}`);

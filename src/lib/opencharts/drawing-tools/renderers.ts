@@ -83,6 +83,8 @@ function drawHandle(scope: BitmapCoordinatesRenderingScope, p: BPt, color: strin
 /** Per-frame cursor for readouts pinned to the pane's top-right corner, so several stack instead of overlapping. */
 export interface ReadoutStack {
   y: number;
+  /** SobatFX: attached labels already drawn this frame (bitmap px), so labels on the same level sit side by side. */
+  labels?: { x0: number; x1: number; y: number }[];
 }
 
 export function renderEntry(
@@ -94,15 +96,15 @@ export function renderEntry(
   switch (e.d.type) {
     case "trendline":
       renderTrendline(scope, e);
-      drawAttachedLabel(scope, e);
+      drawAttachedLabel(scope, e, stack);
       break;
     case "horizontal":
       renderHorizontal(scope, e);
-      drawAttachedLabel(scope, e);
+      drawAttachedLabel(scope, e, stack);
       break;
     case "rectangle":
       renderRectangle(scope, e);
-      drawAttachedLabel(scope, e);
+      drawAttachedLabel(scope, e, stack);
       break;
     case "fibonacci":
       renderFibonacci(scope, e);
@@ -137,7 +139,7 @@ export function renderEntry(
 }
 
 // SobatFX: small caption for lines/zones that carry `text` (e.g. AI "Support").
-function drawAttachedLabel(scope: BitmapCoordinatesRenderingScope, e: ResolvedEntry): void {
+function drawAttachedLabel(scope: BitmapCoordinatesRenderingScope, e: ResolvedEntry, stack: ReadoutStack): void {
   const label = e.d.text;
   if (!label || e.y1 === null) return;
   const ctx = scope.context;
@@ -155,6 +157,19 @@ function drawAttachedLabel(scope: BitmapCoordinatesRenderingScope, e: ResolvedEn
   ctx.font = `600 ${Math.round(11 * vpr)}px sans-serif`;
   ctx.fillStyle = e.d.color;
   ctx.textBaseline = "bottom";
+  // Two levels at (nearly) the same price, e.g. "Resistance" and "TP": shift right past the earlier label instead of overprinting it.
+  const w = ctx.measureText(label).width;
+  const gap = 8 * scope.horizontalPixelRatio;
+  const placed = (stack.labels ??= []);
+  for (let moved = true; moved; ) {
+    moved = false;
+    for (const b of placed)
+      if (Math.abs(b.y - y) < 13 * vpr && x < b.x1 + gap && x + w > b.x0 - gap) {
+        x = b.x1 + gap;
+        moved = true;
+      }
+  }
+  placed.push({ x0: x, x1: x + w, y });
   ctx.fillText(label, x, y);
   ctx.restore();
 }

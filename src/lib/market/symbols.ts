@@ -5,12 +5,13 @@ export type Kind = "forex" | "metal" | "crypto";
 export type SourceNote = "perp" | "xaut" | "cross" | "backup" | "delayed" | "gcf";
 /** Public WebSocket venues in live.ts. */
 export type LiveVenue = "binance" | "binanceFutures" | "okx" | "hyperliquid" | "kraken";
-export type Interval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
+export type Interval = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
 
 export const INTERVALS: { id: Interval; label: string; sec: number }[] = [
   { id: "1m", label: "1m", sec: 60 },
   { id: "5m", label: "5m", sec: 300 },
   { id: "15m", label: "15m", sec: 900 },
+  { id: "30m", label: "30m", sec: 1800 },
   { id: "1h", label: "1H", sec: 3600 },
   { id: "4h", label: "4H", sec: 14400 },
   { id: "1d", label: "1D", sec: 86400 },

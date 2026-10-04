@@ -188,3 +188,18 @@ export function describeDrawings(ds: Drawing[]) {
       }
     });
 }
+
+/** Same object on the chart: type, label and every price/time match (ids and styling ignored). */
+function sameDrawing(a: Drawing, b: Drawing) {
+  if (a.type !== b.type || (a.text ?? "") !== (b.text ?? "")) return false;
+  const eq = (x?: number, y?: number) => (x == null ? y == null : y != null && Math.abs(x - y) <= Math.abs(x) * 1e-7);
+  if (a.type === "horizontal") return eq(a.price, b.price);
+  return eq(a.price, b.price) && eq(a.price2, b.price2) && eq(a.stopPrice, b.stopPrice) && eq(a.targetPrice, b.targetPrice) && a.side === b.side && eq(a.time, b.time) && eq(a.time2, b.time2);
+}
+
+/** Adds drawings to the chart, skipping any already there (the AI often re-sends unchanged levels next to a new one). */
+export function addDrawings(all: Drawing[], add: Drawing[]) {
+  const ids = new Set(add.map((d) => d.id));
+  const kept = all.filter((d) => !ids.has(d.id));
+  return [...kept, ...add.filter((d) => !kept.some((k) => sameDrawing(k, d)))];
+}

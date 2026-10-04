@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Conversation, HISTORY_CLEARED_EVENT, HISTORY_TTL_DAYS, clearHistory, dayGroup, daysLeft, loadHistory, prune, saveHistory, upsert } from "@/lib/chat-history";
 import { extractAnnotations, prepareUpload } from "@/lib/annotate";
 import { journalForAI } from "@/lib/paper";
-import { MIN_RR, type Drawing, type RejectedPlan, asksForDrawing, describeDrawings, extractDrawings, uid } from "@/lib/drawings";
+import { MIN_RR, type Drawing, type RejectedPlan, addDrawings, asksForDrawing, describeDrawings, extractDrawings, uid } from "@/lib/drawings";
 import { AnnotatedImage } from "./AnnotatedImage";
 import { checkPlans, type PlanCheck } from "@/lib/ai/lot-check";
 import { adx, atr, bollinger, ema, macd, rsi, swings, turbulence } from "@/lib/market/indicators";
@@ -575,7 +575,8 @@ function DrawCard({ draw }: { draw: { items: Drawing[]; symbol: string } }) {
         <PenLine size={12} /> {t("ai.drawOther", { n, pair: getInstrument(draw.symbol)?.label ?? draw.symbol })}
       </p>
     );
-  if (drawings.some((d) => ids.has(d.id)))
+  // Also "on the chart" when every object in it is already drawn there (the AI re-sent unchanged levels).
+  if (drawings.some((d) => ids.has(d.id)) || addDrawings(drawings, draw.items).length === drawings.length)
     return (
       <div className="pop mt-2 flex items-center gap-2 rounded-lg border border-gold-deep/40 bg-gold-soft px-2.5 py-1.5 text-xs text-gold">
         <PenLine size={12} /> {t("ai.drew", { n })}
@@ -594,7 +595,7 @@ function DrawCard({ draw }: { draw: { items: Drawing[]; symbol: string } }) {
         <button className="btn btn-gold h-7 text-xs" onClick={() => setDrawings((all) => [...all.filter((d) => d.by !== "ai"), ...draw.items])}>
           {t("ai.drawReplace")}
         </button>
-        <button className="btn h-7 text-xs" onClick={() => setDrawings((all) => [...all.filter((d) => !ids.has(d.id)), ...draw.items])}>
+        <button className="btn h-7 text-xs" onClick={() => setDrawings((all) => addDrawings(all, draw.items))}>
           {t("ai.drawAdd")}
         </button>
       </div>
