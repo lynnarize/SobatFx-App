@@ -6,7 +6,8 @@ import path from "node:path";
 import { contextBlock, systemPrompt } from "../src/lib/ai/prompt";
 import { scrub, streamScrubber } from "../src/lib/ai/sanitize";
 import { formatMtf, higherTimeframes, summarizeTf } from "../src/lib/ai/mtf";
-import { asksForDrawing, extractDrawings } from "../src/lib/drawings";
+import { type Drawing, asksForDrawing, extractDrawings } from "../src/lib/drawings";
+import { guardPlans } from "../src/lib/ai/plan-guard";
 import { checkPlans, lotsInText } from "../src/lib/ai/lot-check";
 import { fingerprint, hasContent, mergeData, type SyncData } from "../src/lib/sync";
 import { emptyData, loadDoc, saveDoc, syncDataSchema } from "../src/lib/sync-store";
@@ -342,6 +343,41 @@ test("plansFromReply keeps only sane positions", () => {
   const r = 'Plan.\n```sobatfx-draw\n{"drawings":[{"type":"position","side":"long","entry":4205,"sl":4195,"tp":4230},{"type":"position","side":"short","entry":4205,"sl":4195,"tp":4180},{"type":"hline","price":4200}]}\n```';
   assert.deepEqual(plansFromReply(r), [{ side: "long", entry: 4205, sl: 4195, tp: 4230 }]);
 });
+{
+  // BTC 15m: grind up, spike rejected at 85428, then three lower highs closing under EMA20 (ATR ≈ 88).
+  const M = 900;
+  const c: Candle[] = Array.from({ length: 80 }, (_, i) => {
+    const o = 84800 + i * 5.5, cl = o + 5.5;
+    return { time: T0 + i * M, open: o, close: cl, high: cl + 30, low: o - 30 };
+  });
+  [[85240, 85428, 85230, 85380], [85380, 85400, 85300, 85320], [85320, 85360, 85200, 85230], [85230, 85300, 85160, 85190], [85190, 85250, 85150, 85180], [85180, 85200, 85170, 85185]]
+    .forEach(([o, h, l, cl], i) => c.push({ time: T0 + (80 + i) * M, open: o, high: h, low: l, close: cl }));
+  const plan = (p: object) => 'x\n```sobatfx-draw\n' + JSON.stringify({ drawings: [{ type: "hline", price: 85428, label: "Resistance 85428" }, { type: "position", t1: T0, ...p }] }) + "\n```";
+  const pos = (ds: Drawing[]) => ds.find((d) => d.type === "position");
+
+  test("plan guard: TP in front of a rejected level, SL out of noise, fading momentum flagged", () => {
+    const g = guardPlans(extractDrawings(plan({ side: "long", entry: 85220, sl: 85140, tp: 85430 })).drawings, c, 2);
+    const p = pos(g.drawings)!;
+    assert.ok(p.targetPrice! < 85428 && p.targetPrice! > 85400, `tp ${p.targetPrice}`);
+    assert.ok(85220 - p.stopPrice! >= 87, `sl ${p.stopPrice}`);
+    assert.deepEqual(g.notes.map((n) => n.kind), ["tp", "sl", "momentum"]);
+    assert.equal(g.rejected.length, 0);
+  });
+  test("plan guard: leaves a sound plan alone", () => {
+    const g = guardPlans(extractDrawings(plan({ side: "long", entry: 85100, sl: 84950, tp: 85390 })).drawings, c, 2);
+    assert.deepEqual([pos(g.drawings)!.stopPrice, pos(g.drawings)!.targetPrice], [84950, 85390]);
+    assert.equal(g.notes.length, 0);
+  });
+  test("plan guard: refuses a plan the corrections push under 1:1, and the track record skips it", () => {
+    const r = plan({ side: "long", entry: 85300, sl: 85250, tp: 85430 });
+    const g = guardPlans(extractDrawings(r).drawings, c, 2);
+    assert.equal(pos(g.drawings), undefined);
+    assert.equal(g.rejected[0]?.adjusted, true);
+    assert.equal(g.notes.length, 0, "no notes for a plan that isn't drawn");
+    assert.deepEqual(plansFromReply(r, c, 2), []);
+    assert.equal(plansFromReply(r).length, 1, "without candles the plan is kept as written");
+  });
+}
 test("track summary: counts, win rate, groups, small-sample warning", () => {
   const rec = (side: "long" | "short", status: "tp" | "sl", r: number, turbPct: number): PlanRecord => ({
     id: Math.random().toString(36), symbol: "XAUUSD", interval: "1h", tier: "pro", side, entry: 1, sl: 0, tp: 2, t: T0, price: 1,

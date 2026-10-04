@@ -12,9 +12,10 @@ import { createHash } from "node:crypto";
 import { extractDrawings } from "../drawings";
 import { getCandles } from "../market/data";
 import { regimeOf } from "../market/indicators";
-import { type Candle, type Interval, INTERVALS, intervalSec } from "../market/symbols";
+import { type Candle, type Interval, INTERVALS, getInstrument, intervalSec } from "../market/symbols";
 import { kv } from "../store";
 import type { Tier } from "../tiers";
+import { guardPlans } from "./plan-guard";
 import type { ChatContext } from "./prompt";
 
 /** Bars a plan gets to hit TP or SL before it's scored at market. */
@@ -86,11 +87,15 @@ export function resolvePlan(p: Pick<PlanRecord, "side" | "entry" | "sl" | "tp" |
   return { status: "expired", r: +((((long ? 1 : -1) * (last.close - p.entry)) / risk)).toFixed(2), at: last.time };
 }
 
-/** Trade plans in an AI reply that make geometric sense (SL and TP on the correct sides of entry). */
-export function plansFromReply(reply: string) {
+/**
+ * Trade plans in an AI reply that make geometric sense (SL and TP on the correct sides of entry). With the chart's
+ * candles they get the same structural corrections the chat applies (plan-guard), so the plan scored is the one drawn.
+ */
+export function plansFromReply(reply: string, candles?: Candle[], digits?: number) {
   // Any time/price range: the plan's time comes from the candles, and bad geometry is filtered below.
-  return extractDrawings(reply, { tMin: 0, tMax: 2 ** 31, pMin: 0, pMax: 1e12, barSec: 3600 })
-    .drawings.filter((d) => d.type === "position")
+  const drawn = extractDrawings(reply, { tMin: 0, tMax: 2 ** 31, pMin: 0, pMax: 1e12, barSec: 3600 }).drawings;
+  return (candles && digits != null ? guardPlans(drawn, candles, digits).drawings : drawn)
+    .filter((d) => d.type === "position")
     .map((d) => ({ side: d.side === "short" ? ("short" as const) : ("long" as const), entry: d.price, sl: d.stopPrice!, tp: d.targetPrice! }))
     .filter((p) => (p.side === "long" ? p.sl < p.entry && p.entry < p.tp : p.tp < p.entry && p.entry < p.sl))
     .slice(0, 2);
@@ -100,7 +105,10 @@ export function plansFromReply(reply: string) {
 export async function recordPlans(reply: string, ctx: ChatContext | undefined, tier: Tier) {
   try {
     if (!ctx?.candles?.length || !ctx.lastPrice || !INTERVALS.some((i) => i.id === ctx.interval)) return;
-    const plans = plansFromReply(reply);
+    const candles = ctx.candles
+      .filter((c) => c.every((v) => v != null))
+      .map(([time, open, high, low, close]) => ({ time, open: open!, high: high!, low: low!, close: close! }));
+    const plans = plansFromReply(reply, candles, getInstrument(ctx.symbol)?.digits);
     if (!plans.length) return;
     const t = ctx.candles.at(-1)![0];
     const ind = ctx.indicators ?? {};

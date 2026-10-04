@@ -10,6 +10,7 @@ import { journalForAI } from "@/lib/paper";
 import { MIN_RR, type Drawing, type RejectedPlan, addDrawings, asksForDrawing, describeDrawings, extractDrawings, uid } from "@/lib/drawings";
 import { AnnotatedImage } from "./AnnotatedImage";
 import { checkPlans, type PlanCheck } from "@/lib/ai/lot-check";
+import { guardPlans, type PlanNote } from "@/lib/ai/plan-guard";
 import { adx, atr, bollinger, ema, macd, rsi, swings, turbulence } from "@/lib/market/indicators";
 import { fmtMoney, pipValueUsd } from "@/lib/market/risk";
 import { getInstrument, intervalSec } from "@/lib/market/symbols";
@@ -34,6 +35,8 @@ interface Msg {
   draw?: { items: Drawing[]; symbol: string };
   /** Trade plans the AI sent that were not drawn because their R:R was below the minimum. */
   rejected?: RejectedPlan[];
+  /** Corrections the app made to the AI's trade plans (TP in front of a level, SL beyond structure) and momentum warnings. */
+  planNotes?: PlanNote[];
   /** The app's own lot sizing for each trade plan the AI drew (the AI's arithmetic can be wrong). */
   sizing?: { checks: PlanCheck[]; currency: "USD" | "IDR"; riskPct: number; digits: number };
   error?: "limit" | "auth" | "other";
@@ -214,7 +217,10 @@ export function AIPanel() {
           ? { tMin: candles[0].time, tMax: candles.at(-1)!.time, pMin: Math.min(...candles.slice(-300).map((c) => c.low)), pMax: Math.max(...candles.slice(-300).map((c) => c.high)), barSec: intervalSec(interval) }
           : undefined;
         const parsed = extractDrawings(full, range);
-        let aiDraw = parsed.drawings;
+        const sizeInst = getInstrument(symbol);
+        const guarded = sizeInst ? guardPlans(parsed.drawings, candles, sizeInst.digits) : { drawings: parsed.drawings, notes: [], rejected: [] };
+        let aiDraw = guarded.drawings;
+        const rejected = [...parsed.rejected, ...guarded.rejected];
         // Free tier is technical analysis only — never place trade-plan (position) drawings.
         if (me?.tier === "free") aiDraw = aiDraw.filter((d) => d.type !== "position");
         // Mark-up of an uploaded picture is drawn on that picture, never on the live chart.
@@ -223,10 +229,12 @@ export function AIPanel() {
         // Otherwise (follow-ups, reviews…) they're offered in the reply and the user decides.
         const replace = asksForDrawing(text) || !drawings.some((d) => d.by === "ai");
         if (aiDraw.length && onChart && replace) setDrawings((all) => [...all.filter((d) => d.by !== "ai"), ...aiDraw]);
-        const sizeInst = getInstrument(symbol);
-        const checks = sizeInst ? checkPlans(parsed.text, aiDraw, sizeInst, risk, rates) : [];
+        // A stop the app moved changes the lot, so the reply's own lot figure is expected to differ.
+        const movedSl = new Set(guarded.notes.filter((n) => n.kind === "sl").map((n) => `${n.side}|${n.entry}`));
+        const checks = (sizeInst ? checkPlans(parsed.text, aiDraw, sizeInst, risk, rates) : []).map((c) => (movedSl.has(`${c.side}|${c.entry}`) ? { ...c, mismatch: false } : c));
+        const paid = onChart && !upload && me?.tier !== "free";
         const sizing = checks.length ? { checks, currency: risk.currency, riskPct: risk.riskPct, digits: sizeInst!.digits } : undefined;
-        update((m) => ({ ...m, content: full, draw: onChart && aiDraw.length ? { items: aiDraw, symbol } : undefined, drawFailed: onChart && !upload && parsed.unreadable, rejected: onChart && !upload && me?.tier !== "free" ? parsed.rejected : undefined, sizing }));
+        update((m) => ({ ...m, content: full, draw: onChart && aiDraw.length ? { items: aiDraw, symbol } : undefined, drawFailed: onChart && !upload && parsed.unreadable, rejected: paid ? rejected : undefined, planNotes: paid && guarded.notes.length ? guarded.notes : undefined, sizing }));
       } catch (e) {
         if ((e as Error).name === "AbortError") update((m) => ({ ...m, content: m.content + `\n\n_${t("ai.stopped")}_` }));
         else update(() => ({ role: "assistant", content: t("ai.connection"), error: "other" }));
@@ -422,7 +430,17 @@ export function AIPanel() {
                   {m.rejected?.map((p, j) => (
                     <p key={j} className="mt-2 flex items-start gap-1.5 rounded-lg border border-down/40 bg-panel-2 px-2.5 py-1.5 text-xs text-down">
                       <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                      {t("ai.rrRejected", { side: t(p.side === "short" ? "pos.short" : "pos.long"), entry: p.entry, rr: p.rr.toFixed(2), min: MIN_RR })}
+                      {t(p.adjusted ? "ai.rrRejectedAdj" : "ai.rrRejected", { side: t(p.side === "short" ? "pos.short" : "pos.long"), entry: p.entry, rr: p.rr.toFixed(2), min: MIN_RR })}
+                    </p>
+                  ))}
+                  {m.planNotes?.map((n, j) => (
+                    <p key={j} className="mt-2 flex items-start gap-1.5 rounded-lg border border-gold-deep/40 bg-panel-2 px-2.5 py-1.5 text-xs text-gold">
+                      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                      {n.kind === "tp"
+                        ? t("ai.fixTp", { from: n.from, to: n.to, level: n.level })
+                        : n.kind === "sl"
+                          ? t("ai.fixSl", { from: n.from, to: n.to, atr: n.atr })
+                          : t(n.side === "short" ? "ai.momentumShort" : "ai.momentumLong", { entry: n.entry })}
                     </p>
                   ))}
                   {m.drawFailed && (

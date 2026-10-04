@@ -42,6 +42,8 @@ export interface RejectedPlan {
   sl: number;
   tp: number;
   rr: number;
+  /** Refused after the app moved its TP/SL to structure (src/lib/ai/plan-guard.ts), not as the AI wrote it. */
+  adjusted?: boolean;
 }
 
 export interface Range {
