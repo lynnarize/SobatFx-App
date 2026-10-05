@@ -1,6 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { consumeGlobalCap, hit, readJson, refundGlobalCap } from "@/lib/guard";
+import { envNum as num, partnerGate } from "@/lib/partner";
 import { ProviderError, streamForTier } from "@/lib/ai/providers";
 import { scrub } from "@/lib/ai/sanitize";
 import { LEVELS_SYSTEM, autoLevels, levelsPrompt, parseAiLevels, type Level } from "@/lib/levels";
@@ -35,18 +35,6 @@ const Body = z.object({
   sl: z.number().positive().finite().optional(),
 });
 
-const num = (v: string | undefined, d: number) => (v && Number.isFinite(+v) ? +v : d);
-
-/** The caller's key, or null. Compared in constant time against every configured key. */
-function partnerKey(req: Request) {
-  const keys = (process.env.PARTNER_API_KEYS || "").split(",").map((s) => s.trim()).filter((s) => s.length >= 24);
-  const given = /^Bearer\s+(.+)$/i.exec(req.headers.get("authorization") ?? "")?.[1]?.trim();
-  if (!keys.length || !given) return null;
-  const g = createHash("sha256").update(given).digest();
-  const match = keys.find((k) => timingSafeEqual(createHash("sha256").update(k).digest(), g));
-  return match ? createHash("sha256").update(match).digest("hex").slice(0, 16) : null;
-}
-
 function aiTier(): Tier | null {
   const t = process.env.PARTNER_AI_TIER || "pro";
   return t === "free" || t === "pro" || t === "ultimate" ? t : null;
@@ -64,12 +52,9 @@ async function askAi(tier: Tier, prompt: string) {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.PARTNER_API_KEYS) return Response.json({ error: "not found" }, { status: 404 });
-  const key = partnerKey(req);
-  if (!key) return Response.json({ error: "unauthorized" }, { status: 401 });
-
-  const burst = await hit(`partner:${key}`, num(process.env.PARTNER_PER_MIN, 10), 60);
-  if (!burst.ok) return Response.json({ error: "rate limited" }, { status: 429, headers: { "Retry-After": String(burst.retryAfter) } });
+  const gate = await partnerGate(req, "partner");
+  if ("error" in gate) return gate.error;
+  const { key } = gate;
 
   const raw = await readJson(req, 4096);
   if (!raw.ok) return Response.json({ error: "invalid body" }, { status: raw.status });
