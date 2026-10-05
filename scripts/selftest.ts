@@ -234,7 +234,7 @@ test("loose JSON repairs leave string contents alone", () => {
 });
 
 // ── Demo trading ──
-import { closeTrade, entryReached, fillTrade, firstFillInCandles, firstHitInCandles, hitInRange, pendingKind, stats, tradePnl, validateLevels, type PaperTrade } from "../src/lib/paper";
+import { closeTrade, entryReached, exitPrice, fillTrade, firstFillInCandles, firstHitInCandles, hitInRange, marketPrice, pendingKind, spreadFor, stats, tradePnl, validateLevels, type PaperTrade } from "../src/lib/paper";
 
 const pt = (o: Partial<PaperTrade>): PaperTrade => ({ id: "t", symbol: "EURUSD", side: "buy", lot: 0.1, entry: 1.1, openedAt: 1_790_000_000_000, ...o });
 
@@ -316,6 +316,50 @@ test("paper stats: pending orders are neither open nor closed", () => {
   assert.equal(s.open, 1);
   assert.equal(s.pending, 1);
   assert.equal(s.closed, 1);
+});
+test("paper MT5 spread: 30 points per forex/metal instrument, none on crypto; old trades without a spread are unchanged", () => {
+  assert.equal(spreadFor("mt5", getInstrument("XAUUSD")!), 0.3);
+  assert.equal(spreadFor("mt5", getInstrument("EURUSD")!), 0.0003);
+  assert.equal(spreadFor("mt5", getInstrument("USDJPY")!), 0.03);
+  assert.equal(spreadFor("none", getInstrument("XAUUSD")!), 0);
+  assert.equal(spreadFor(undefined, getInstrument("XAUUSD")!), 0);
+  assert.equal(spreadFor("mt5", getInstrument("BTCUSD")!), 0, "crypto has no spread");
+  const old = pt({ side: "sell", sl: 1.102 });
+  assert.equal(exitPrice(old, 1.1), 1.1);
+  assert.equal(hitInRange(old, 1.1, 1.1019), null);
+});
+test("paper MT5 spread: buy opens at Ask / closes at Bid, sell opens at Bid / closes at Ask", () => {
+  const s = 0.3;
+  assert.equal(marketPrice("buy", 4150, s), 4150.3);
+  assert.equal(marketPrice("sell", 4150, s), 4150);
+  // Opened and closed straight away = lose the spread: 0.30 × 0.01 lot × 100 oz = $0.30.
+  const buy = pt({ symbol: "XAUUSD", lot: 0.01, entry: 4150.3, spread: s });
+  const sell = pt({ symbol: "XAUUSD", side: "sell", lot: 0.01, entry: 4150, spread: s });
+  assert.equal(tradePnl(buy, exitPrice(buy, 4150)).toFixed(2), "-0.30");
+  assert.equal(tradePnl(sell, exitPrice(sell, 4150)).toFixed(2), "-0.30");
+  assert.equal(closeTrade(sell, 4150, "manual", 1, {}).exit, 4150.3);
+  assert.equal(closeTrade(sell, 4150, "manual", 1, {}).pnl, -0.3);
+});
+test("paper MT5 spread: a sell's SL is hit by the Ask, a buy's by the Bid; buy pending orders fill on the Ask", () => {
+  const sell = pt({ symbol: "XAUUSD", side: "sell", entry: 4150, sl: 4155, tp: 4140, spread: 0.3 });
+  assert.equal(hitInRange(sell, 4154.6, 4154.6), null);
+  assert.equal(hitInRange(sell, 4154.7, 4154.7), "sl", "Bid 4154.70 → Ask 4155.00 reaches the SL");
+  assert.equal(hitInRange(sell, 4140.1, 4140.1), null, "Bid touched 4140.10, the Ask is still above the TP");
+  assert.equal(hitInRange(sell, 4139.7, 4139.7), "tp");
+  const buy = pt({ symbol: "XAUUSD", entry: 4150.3, sl: 4145, tp: 4160, spread: 0.3 });
+  assert.equal(hitInRange(buy, 4145.1, 4159.9), null);
+  assert.equal(hitInRange(buy, 4146, 4160), "tp");
+  const buyLimit = pt({ symbol: "XAUUSD", pending: "limit", entry: 4148, spread: 0.3 });
+  assert.equal(entryReached(buyLimit, 4147.8, 4150), false, "Ask 4148.10 has not fallen to 4148");
+  assert.equal(entryReached(buyLimit, 4147.7, 4150), true);
+  const sellLimit = pt({ symbol: "XAUUSD", side: "sell", pending: "limit", entry: 4152, spread: 0.3 });
+  assert.equal(entryReached(sellLimit, 4150, 4151.9), false, "a sell fills on the Bid");
+});
+test("paper MT5 spread: the SL has to clear the closing price", () => {
+  assert.equal(validateLevels("buy", 4150.3, 4150.1, undefined, 0.3), "slSide", "SL above the Bid would close at once");
+  assert.equal(validateLevels("buy", 4150.3, 4149.9, 4150.4, 0.3), null);
+  assert.equal(validateLevels("sell", 4150, 4150.2, undefined, 0.3), "slSide", "SL below the Ask would close at once");
+  assert.equal(validateLevels("sell", 4150, 4150.4, 4149.9, 0.3), null);
 });
 
 // ── Market feedback (track record) + regime features ──

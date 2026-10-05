@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { fmtMoney } from "@/lib/market/risk";
 import { getInstrument } from "@/lib/market/symbols";
-import { type PaperTrade, kindKey, rMultiple, stats, tradePips, tradePnl } from "@/lib/paper";
+import { type PaperTrade, exitPrice, kindKey, rMultiple, stats, tradePips, tradePnl } from "@/lib/paper";
 import { useT } from "../i18n";
 import { fmtPrice, useWs } from "../workspace";
 
@@ -22,7 +22,7 @@ export function OpenPositions({ showJournalLink }: { showJournalLink?: boolean }
   const rows = paper.trades.filter((x) => x.closedAt == null);
   const open = rows.filter((x) => !x.pending);
   const pending = rows.filter((x) => x.pending);
-  const floating = open.reduce((s, x) => s + (prices[x.symbol] != null ? tradePnl(x, prices[x.symbol], rates) : 0), 0);
+  const floating = open.reduce((s, x) => s + (prices[x.symbol] != null ? tradePnl(x, exitPrice(x, prices[x.symbol]), rates) : 0), 0);
   const balance = stats(paper).balance;
   const ordered = [...open, ...pending];
   const onClose = (x: PaperTrade) => (p: number) => (x.pending ? cancelPaperTrade(x.id) : closePaperTrade(x.id, p, "manual"));
@@ -81,19 +81,21 @@ export function OpenPositions({ showJournalLink }: { showJournalLink?: boolean }
 
 type RowProps = { x: PaperTrade; price?: number; rates: Record<string, number>; onClose(p: number): void };
 
-/** Everything a position row shows, shared by the table row and the stacked item. */
+/** Everything a position row shows, shared by the table row and the stacked item. `price` is the live Bid. */
 function usePosition({ x, price, rates, onClose }: RowProps) {
   const { t } = useT();
   const inst = getInstrument(x.symbol)!;
   const pending = x.pending != null;
-  const pnl = price != null && !pending ? tradePnl(x, price, rates) : null;
+  // What the trade would close at now: the Bid for a buy, the Ask for a sell (same as the Bid without a spread).
+  const now = price != null && !pending ? exitPrice(x, price) : price;
+  const pnl = now != null && !pending ? tradePnl(x, now, rates) : null;
   const fmt = (p?: number) => (p != null ? fmtPrice(p, inst.digits) : "—");
   const sideCls = x.side === "buy" ? "text-up" : "text-down";
   const side = t(x.pending ? kindKey(x.side, x.pending) : x.side === "buy" ? "trade.buy" : "trade.sell");
   const pl = (
     <>
       {pnl != null ? fmtMoney(pnl, "USD") : "—"}
-      {pending ? <div className="text-[10px] text-gold">{t("trade.pendingOrder")}</div> : price != null && <div className="text-[10px] text-muted">{tradePips(x, price, inst).toFixed(1)} pips</div>}
+      {pending ? <div className="text-[10px] text-gold">{t("trade.pendingOrder")}</div> : price != null && <div className="text-[10px] text-muted">{tradePips(x, now!, inst).toFixed(1)} pips</div>}
     </>
   );
   const button = (
@@ -101,12 +103,12 @@ function usePosition({ x, price, rates, onClose }: RowProps) {
       {t(pending ? "trade.cancel" : "trade.close")}
     </button>
   );
-  return { t, inst, pnl, fmt, sideCls, side, pl, button };
+  return { t, inst, now, pnl, fmt, sideCls, side, pl, button };
 }
 
 function OpenRow(props: RowProps) {
-  const { x, price } = props;
-  const { inst, pnl, fmt, sideCls, side, pl, button } = usePosition(props);
+  const { x } = props;
+  const { inst, now, pnl, fmt, sideCls, side, pl, button } = usePosition(props);
   return (
     <tr className="enter">
       <td className="py-2">
@@ -119,7 +121,7 @@ function OpenRow(props: RowProps) {
         <div>{fmt(x.sl)}</div>
         <div>{fmt(x.tp)}</div>
       </td>
-      <td className="num">{fmt(price)}</td>
+      <td className="num">{fmt(now)}</td>
       <td className={`num text-right ${pnl != null ? pnlCls(pnl) : ""}`}>{pl}</td>
       <td className="text-right">{button}</td>
     </tr>
@@ -127,8 +129,8 @@ function OpenRow(props: RowProps) {
 }
 
 function OpenItem(props: RowProps) {
-  const { x, price } = props;
-  const { t, inst, pnl, fmt, sideCls, side, pl, button } = usePosition(props);
+  const { x } = props;
+  const { t, inst, now, pnl, fmt, sideCls, side, pl, button } = usePosition(props);
   return (
     <li className="enter py-3">
       <div className="flex items-center gap-2">
@@ -146,7 +148,7 @@ function OpenItem(props: RowProps) {
         </div>
         <div className={`num row-span-2 text-right text-sm ${pnl != null ? pnlCls(pnl) : ""}`}>{pl}</div>
         <div className="text-muted">
-          {t("trade.now")} <span className="num text-ink">{fmt(price)}</span>
+          {t("trade.now")} <span className="num text-ink">{fmt(now)}</span>
         </div>
         <div className="text-muted">
           TP <span className="num text-ink-2">{fmt(x.tp)}</span>

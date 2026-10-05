@@ -3,17 +3,21 @@
 import { useState } from "react";
 import { fmtMoney, pipValueUsd, positionSize } from "@/lib/market/risk";
 import { getInstrument } from "@/lib/market/symbols";
-import { type Side, kindKey, pendingKind, stats, validateLevels } from "@/lib/paper";
+import { MT5_SPREAD_POINTS, type Side, kindKey, marketPrice, pendingKind, spreadFor, stats, validateLevels } from "@/lib/paper";
 import { useT } from "../i18n";
 import { fmtPrice, useWs } from "../workspace";
 
-/** Buy/Sell with virtual money at the live price of the chart symbol. */
+/** Buy/Sell with virtual money at the live price of the chart symbol (Bid), or Ask/Bid with the MT5-style spread. */
 export function OrderTicket() {
-  const { symbol, prices, candles, paper, openPaperTrade, risk, rates } = useWs();
+  const { symbol, prices, candles, paper, openPaperTrade, setSpreadMode, risk, rates } = useWs();
   const { t } = useT();
   const inst = getInstrument(symbol)!;
-  const price = prices[symbol] ?? candles.at(-1)?.close;
+  const bid = prices[symbol] ?? candles.at(-1)?.close;
+  const mode = paper.spreadMode ?? "none";
+  const spread = spreadFor(mode, inst);
   const [side, setSide] = useState<Side>("buy");
+  // The price a market order of the chosen side fills at: Ask for a buy, Bid for a sell.
+  const price = bid != null ? marketPrice(side, bid, spread) : undefined;
   const [lot, setLot] = useState(0.01);
   const [entry, setEntry] = useState("");
   const [sl, setSl] = useState("");
@@ -38,10 +42,10 @@ export function OrderTicket() {
     if (entry && !(entryN! > 0 && Number.isFinite(entryN))) return setErr(t("trade.errEntry"));
     if (entryN && Math.abs(entryN - price) / price > 0.5) return setErr(t("trade.errEntryFar"));
     const at = kind ? entryN! : price; // SL / TP are checked against the price the trade will be filled at
-    const bad = validateLevels(side, at, slN, tpN);
+    const bad = validateLevels(side, at, slN, tpN, spread);
     if (bad) return setErr(t(bad === "slSide" ? "trade.errSlSide" : "trade.errTpSide"));
     setErr(null);
-    openPaperTrade({ symbol, side, lot: +lot.toFixed(2), entry: at, pending: kind ?? undefined, sl: slN, tp: tpN });
+    openPaperTrade({ symbol, side, lot: +lot.toFixed(2), entry: at, pending: kind ?? undefined, sl: slN, tp: tpN, spread: spread || undefined });
     setEntry("");
     setSl("");
     setTp("");
@@ -68,9 +72,26 @@ export function OrderTicket() {
             className={`rounded-lg border px-3 py-2 text-left ${side === s ? (s === "buy" ? "border-up bg-up/15" : "border-down bg-down/15") : "border-line-2 bg-panel"}`}
           >
             <div className={`text-xs font-semibold ${s === "buy" ? "text-up" : "text-down"}`}>{t(s === "buy" ? "trade.buy" : "trade.sell")}</div>
-            <div className="num text-sm">{fmtPrice(price, inst.digits)}</div>
+            <div className="num text-sm">{fmtPrice(bid != null ? marketPrice(s, bid, spread) : undefined, inst.digits)}</div>
           </button>
         ))}
+      </div>
+      <div className="mt-2 flex items-center gap-2 text-[11px] text-muted">
+        {t("trade.spread")}
+        <div className="ml-auto flex rounded-lg border border-line-2 p-0.5" role="radiogroup" aria-label={t("trade.spread")}>
+          {(["none", "mt5"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={mode === m}
+              onClick={() => setSpreadMode(m)}
+              className={`rounded-md px-2 py-0.5 ${mode === m ? "bg-panel-3 text-ink" : "hover:text-ink"}`}
+            >
+              {t(m === "mt5" ? "trade.spreadMt5" : "trade.spreadNone", { pts: MT5_SPREAD_POINTS })}
+            </button>
+          ))}
+        </div>
       </div>
       <label className="mt-3 flex flex-col gap-1 text-[11px] text-muted">
         {t("trade.entryPrice")}
@@ -123,7 +144,7 @@ export function OrderTicket() {
           ? t("trade.placeOrder", { kind: t(kindKey(side, kind)), lot: lot.toFixed(2), pair: inst.label, price: fmtPrice(entryN, inst.digits) })
           : t(side === "buy" ? "trade.openBuy" : "trade.openSell", { lot: lot.toFixed(2), pair: inst.label })}
       </button>
-      <p className="mt-2 text-center text-[10px] text-muted">{t("trade.note")}</p>
+      <p className="mt-2 text-center text-[10px] text-muted">{spread ? t("trade.noteSpread", { pts: MT5_SPREAD_POINTS }) : t("trade.note")}</p>
     </div>
   );
 }

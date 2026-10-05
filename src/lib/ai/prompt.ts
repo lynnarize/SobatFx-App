@@ -177,7 +177,7 @@ export function contextBlock(ctx: ChatContext | undefined, news: string, image: 
     ctx.swings ? `Recent swing highs: ${ctx.swings.highs.map((s) => `${s.price}@${s.time}`).join(", ") || "none"}\nRecent swing lows: ${ctx.swings.lows.map((s) => `${s.price}@${s.time}`).join(", ") || "none"}` : "",
     riskLine(ctx),
     ctx.journal
-      ? `User's DEMO trading journal (virtual money, no spread/commission): ${ctx.journal.summary}\nTrades (oldest→newest):\n${ctx.journal.trades.join("\n")}`
+      ? `User's DEMO trading journal (virtual money, no commission): ${ctx.journal.summary}\nTrades (oldest→newest):\n${ctx.journal.trades.join("\n")}`
       : "",
     ctx.drawings?.length ? `User's drawings on chart: ${JSON.stringify(ctx.drawings).slice(0, 1500)}` : "User has no drawings on the chart.",
     ctx.candles?.length ? `Last ${ctx.candles.length} candles [time,open,high,low,close] (oldest→newest):\n${ctx.candles.map((c) => c.join(",")).join("\n")}` : "",

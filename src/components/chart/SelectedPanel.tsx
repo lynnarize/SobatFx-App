@@ -2,7 +2,7 @@
 
 import { Crown, Lock, PlayCircle, Sparkles, Trash2, Unlock, X } from "lucide-react";
 import { useState } from "react";
-import { kindKey, pendingKind, validateLevels } from "@/lib/paper";
+import { kindKey, marketPrice, pendingKind, spreadFor, validateLevels } from "@/lib/paper";
 import Link from "next/link";
 import { AI_COLOR, type Drawing, describeDrawings } from "@/lib/drawings";
 import { fmtMoney, positionSize } from "@/lib/market/risk";
@@ -13,7 +13,7 @@ import { fmtPrice, useWs } from "../workspace";
 
 /** Inspector for the selected drawing — the position tool doubles as the lot-size calculator. */
 export function SelectedPanel({ d, onChange, onDelete, onClose }: { d: Drawing; onChange(p: Partial<Drawing>): void; onDelete(): void; onClose(): void }) {
-  const { symbol, risk, setRisk, rates, askAI, me, prices, candles, openPaperTrade } = useWs();
+  const { symbol, risk, setRisk, rates, askAI, me, prices, candles, paper, openPaperTrade } = useWs();
   const [tradeMsg, setTradeMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const canReview = (me?.tier ?? "free") !== "free";
   const { t } = useT();
@@ -35,16 +35,18 @@ export function SelectedPanel({ d, onChange, onDelete, onClose }: { d: Drawing; 
   const pos = d.type === "position" && d.stopPrice != null ? positionSize(inst, risk, d.price, d.stopPrice, d.targetPrice ?? null, rates) : null;
 
   // Demo trade from a long/short drawing: at the live price, or as a pending order at the drawing's entry price.
-  const live = prices[symbol] ?? candles.at(-1)?.close;
+  const bid = prices[symbol] ?? candles.at(-1)?.close;
   const tradeSide = d.side === "short" ? "sell" : "buy";
+  const spread = spreadFor(paper.spreadMode, inst);
+  const live = bid != null ? marketPrice(tradeSide, bid, spread) : undefined;
   const entryKind = d.type === "position" && live ? pendingKind(tradeSide, live, d.price) : null;
   const placeTrade = (atEntry: boolean) => {
     if (!live) return;
     const kind = atEntry ? entryKind : null;
     const at = kind ? d.price : live;
-    const bad = validateLevels(tradeSide, at, d.stopPrice, d.targetPrice);
+    const bad = validateLevels(tradeSide, at, d.stopPrice, d.targetPrice, spread);
     if (bad) return setTradeMsg({ ok: false, text: t(bad === "slSide" ? "trade.errSlSide" : "trade.errTpSide") });
-    openPaperTrade({ symbol, side: tradeSide, lot: Math.max(0.01, pos?.lot ?? 0.01), entry: at, pending: kind ?? undefined, sl: d.stopPrice, tp: d.targetPrice });
+    openPaperTrade({ symbol, side: tradeSide, lot: Math.max(0.01, pos?.lot ?? 0.01), entry: at, pending: kind ?? undefined, sl: d.stopPrice, tp: d.targetPrice, spread: spread || undefined });
     setTradeMsg({ ok: true, text: t(kind ? "trade.placed" : "trade.opened") });
   };
 

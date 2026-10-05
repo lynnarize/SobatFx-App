@@ -3,7 +3,7 @@
 import { type IChartApi, type IPriceLine, type ISeriesApi, LineStyle } from "lightweight-charts";
 import { type RefObject, useEffect, useRef } from "react";
 import type { Instrument } from "@/lib/market/symbols";
-import { type PaperTrade, type PendingKind, type Side, tradePips, tradePnl, validateLevels } from "@/lib/paper";
+import { type PaperTrade, type PendingKind, type Side, exitPrice, tradePips, tradePnl, validateLevels } from "@/lib/paper";
 
 // MetaTrader 5-style trade levels for open demo trades:
 //  - drag the SL / TP line to move it,
@@ -104,9 +104,10 @@ export function useTradeLevels(o: Opts) {
 
     const levelFor = (t: PaperTrade, price: number): Level => ((price > t.entry) === (t.side === "buy") ? "tp" : "sl");
     const valid = (t: PaperTrade, target: Level, price: number) => {
-      // A pending order's levels are judged against its own entry, not the live price.
-      const live = t.pending ? t.entry : (latest.current.livePrice ?? t.entry);
-      return validateLevels(t.side, live, target === "sl" ? price : undefined, target === "tp" ? price : undefined) === null;
+      // A pending order's levels are judged against its own entry; an open trade's against the price it would close at now.
+      const { livePrice } = latest.current;
+      const [ref, spread] = t.pending ? [t.entry, t.spread] : [livePrice != null ? exitPrice(t, livePrice) : t.entry, 0];
+      return validateLevels(t.side, ref, target === "sl" ? price : undefined, target === "tp" ? price : undefined, spread) === null;
     };
 
     const start = (clientX: number, clientY: number, e: Event) => {

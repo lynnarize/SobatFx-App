@@ -23,7 +23,7 @@ export function fingerprint(d: SyncData) {
 }
 
 export const hasContent = (d: SyncData) =>
-  d.paper.trades.length > 0 || d.paper.startBalance !== DEFAULT_PAPER.startBalance || Object.values(d.drawings).some((l) => l.length > 0);
+  d.paper.trades.length > 0 || d.paper.startBalance !== DEFAULT_PAPER.startBalance || (d.paper.spreadMode ?? "none") !== "none" || Object.values(d.drawings).some((l) => l.length > 0);
 
 // A trade only moves forward: pending → open → closed.
 const stage = (t: PaperTrade) => (t.closedAt != null ? 2 : t.pending ? 0 : 1);
@@ -50,5 +50,5 @@ export function mergeData(mine: SyncData, theirs: SyncData): SyncData {
   });
   trades.push(...theirTrades.values());
   trades.sort((a, b) => a.openedAt - b.openedAt);
-  return { drawings, paper: { startBalance: mine.paper.startBalance, trades } };
+  return { drawings, paper: { startBalance: mine.paper.startBalance, spreadMode: mine.paper.spreadMode, trades } };
 }

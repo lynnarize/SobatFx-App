@@ -3,7 +3,7 @@
 import { SessionProvider } from "next-auth/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { type Drawing, uid } from "@/lib/drawings";
-import { type CloseReason, DEFAULT_PAPER, type PaperAccount, type PaperTrade, closeTrade, fillTrade } from "@/lib/paper";
+import { type CloseReason, DEFAULT_PAPER, type PaperAccount, type PaperTrade, type SpreadMode, closeTrade, fillTrade } from "@/lib/paper";
 import { DEFAULT_RISK, type RiskSettings } from "@/lib/market/risk";
 import { type Candle, DEFAULT_WATCHLIST, type Interval, type SourceNote, getInstrument } from "@/lib/market/symbols";
 import type { UsdIdrQuote } from "@/lib/fx";
@@ -61,6 +61,7 @@ interface Ws {
   /** Demo trading (virtual money), saved in this browser and synced to the Google account. */
   paper: PaperAccount;
   openPaperTrade(t: Omit<PaperTrade, "id" | "openedAt">): void;
+  /** `price` is the live (Bid) price; a manual close of a sell exits at the Ask. */
   closePaperTrade(id: string, price: number, reason: CloseReason, at?: number): void;
   /** A pending order reached its entry price: it becomes an open position. */
   fillPaperTrade(id: string, at?: number): void;
@@ -69,6 +70,8 @@ interface Ws {
   /** Move / add / remove SL or TP of an open demo trade (e.g. by dragging it on the chart). */
   modifyPaperTrade(id: string, patch: Partial<Pick<PaperTrade, "sl" | "tp">>): void;
   resetPaper(startBalance: number): void;
+  /** Spread for new demo trades: none, or MT5 style (Buy at Ask / Sell at Bid). Open trades keep theirs. */
+  setSpreadMode(m: SpreadMode): void;
   /** Latest live price per symbol (fed by the chart and the paper-trading engine). */
   prices: Record<string, number>;
   setPrice(symbol: string, price: number): void;
@@ -257,7 +260,8 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     fillPaperTrade: (id, at) => setPaper((a) => ({ ...a, trades: a.trades.map((x) => (x.id === id && x.pending ? fillTrade(x, at ?? Date.now()) : x)) })),
     cancelPaperTrade: (id) => setPaper((a) => ({ ...a, trades: a.trades.filter((x) => !(x.id === id && x.pending)) })),
     modifyPaperTrade: (id, patch) => setPaper((a) => ({ ...a, trades: a.trades.map((x) => (x.id === id && x.closedAt == null ? { ...x, ...patch } : x)) })),
-    resetPaper: (startBalance) => setPaper({ startBalance, trades: [] }),
+    resetPaper: (startBalance) => setPaper((a) => ({ startBalance, trades: [], spreadMode: a.spreadMode })),
+    setSpreadMode: (spreadMode) => setPaper((a) => ({ ...a, spreadMode })),
     prices,
     setPrice,
   };

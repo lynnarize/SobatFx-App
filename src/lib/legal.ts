@@ -6,7 +6,7 @@ import type { Lang } from "./i18n";
 // Terms: keep them in step with the plans, limits and payment methods (tiers.ts, payments.ts) and bump TERMS_UPDATED.
 
 export const PRIVACY_UPDATED = "2026-10-02";
-export const TERMS_UPDATED = "2026-10-01";
+export const TERMS_UPDATED = "2026-10-05";
 
 export interface LegalSection {
   h: string;
@@ -222,7 +222,7 @@ const termsEn: LegalDoc = {
     {
       h: "2. Demo trading is a simulation",
       p: [
-        "The trading journal and demo tickets use virtual money only. No real orders are placed. Demo fills use the live price without spread, commission, swap, slippage or rejected orders, so real trading results will differ, usually for the worse. Good demo results do not predict real results, and a virtual balance has no cash value.",
+        "The trading journal and demo tickets use virtual money only. No real orders are placed. Demo fills use the live price, either with no spread or with a fixed MT5-style spread you can choose. They have no commission, swap, slippage or rejected orders, and a real broker's spread changes all the time, so real trading results will differ, usually for the worse. Good demo results do not predict real results, and a virtual balance has no cash value.",
       ],
     },
     {
@@ -315,7 +315,7 @@ const termsId: LegalDoc = {
     {
       h: "2. Demo trading hanyalah simulasi",
       p: [
-        "Jurnal trading dan tiket demo hanya memakai uang virtual. Tidak ada order sungguhan yang ditempatkan. Eksekusi demo memakai harga live tanpa spread, komisi, swap, slippage, atau order yang ditolak, sehingga hasil trading sungguhan akan berbeda, biasanya lebih buruk. Hasil demo yang bagus tidak memprediksi hasil nyata, dan saldo virtual tidak memiliki nilai uang.",
+        "Jurnal trading dan tiket demo hanya memakai uang virtual. Tidak ada order sungguhan yang ditempatkan. Eksekusi demo memakai harga live, tanpa spread atau dengan spread tetap gaya MT5 yang bisa kamu pilih. Tidak ada komisi, swap, slippage, atau order yang ditolak, dan spread broker sungguhan selalu berubah, sehingga hasil trading sungguhan akan berbeda, biasanya lebih buruk. Hasil demo yang bagus tidak memprediksi hasil nyata, dan saldo virtual tidak memiliki nilai uang.",
       ],
     },
     {

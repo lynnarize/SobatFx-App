@@ -22,6 +22,7 @@ const trade = z.object({
   exit: price.optional(),
   result: z.enum(["tp", "sl", "manual"]).optional(),
   pnl: price.optional(),
+  spread: price.min(0).optional(),
 });
 
 // Drawings come from the vendored chart library (many optional fields), so only the identity is checked here.
@@ -29,7 +30,7 @@ const drawing = z.looseObject({ id: z.string().max(64), type: z.string().max(32)
 
 export const syncDataSchema = z.object({
   drawings: z.record(z.string().max(16), z.array(drawing).max(500)),
-  paper: z.object({ startBalance: price, trades: z.array(trade).max(5000) }),
+  paper: z.object({ startBalance: price, spreadMode: z.enum(["none", "mt5"]).optional(), trades: z.array(trade).max(5000) }),
 });
 
 export const emptyData = (): SyncData => ({ drawings: {}, paper: { startBalance: 10_000, trades: [] } });

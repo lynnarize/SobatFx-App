@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  CandlestickChart,
   ChevronRight,
   Cloud,
   Coins,
@@ -26,6 +27,7 @@ import { type ComponentType, type ReactNode, useEffect, useId, useState } from "
 import { HISTORY_TTL_DAYS, clearHistory } from "@/lib/chat-history";
 import type { Key, Lang } from "@/lib/i18n";
 import { fmtMoney, withCurrency } from "@/lib/market/risk";
+import { MT5_SPREAD_POINTS } from "@/lib/paper";
 import { THEMES, type Theme } from "@/lib/theme";
 import { useT } from "../i18n";
 import { LiveRate } from "../LiveRate";
@@ -51,7 +53,7 @@ const BUILD = {
   commit: process.env.NEXT_PUBLIC_COMMIT || "",
 };
 
-type SectionId = "appearance" | "general" | "language" | "currency" | "privacy" | "about";
+type SectionId = "appearance" | "general" | "language" | "currency" | "trading" | "privacy" | "about";
 
 const readOpen = (): Record<string, boolean> => {
   try {
@@ -90,7 +92,7 @@ export function SettingsDialog() {
 function Sheet({ focus, close }: { focus?: SectionId; close(): void }) {
   const { t, lang } = useT();
   const { pref, theme } = useTheme();
-  const { risk, usdIdr } = useWs();
+  const { risk, usdIdr, paper } = useWs();
   const titleId = useId();
 
   useEffect(() => {
@@ -159,6 +161,15 @@ function Sheet({ focus, close }: { focus?: SectionId; close(): void }) {
             summary={`${risk.currency} · ${fmtMoney(risk.balance, risk.currency)} · 1 USD = Rp ${rate.toLocaleString("id-ID", { maximumFractionDigits: 0 })}${usdIdr?.live ? ` (${t("set.live")})` : ""}`}
           >
             <Currency />
+          </Section>
+
+          <Section
+            id="trading"
+            icon={CandlestickChart}
+            title={t("set.trading")}
+            summary={`${t("trade.spread")}: ${t(paper.spreadMode === "mt5" ? "trade.spreadMt5" : "trade.spreadNone", { pts: MT5_SPREAD_POINTS })}`}
+          >
+            <Trading />
           </Section>
 
           <Section id="privacy" icon={ShieldCheck} title={t("set.privacy")} summary={t("set.privacySummary", { days: HISTORY_TTL_DAYS })}>
@@ -403,6 +414,40 @@ function Currency() {
       <p className="text-xs leading-relaxed text-muted">
         {t("set.currencySub")} {t("set.convertNote")}
       </p>
+    </div>
+  );
+}
+
+/* ───────────── Demo trading ───────────── */
+
+function Trading() {
+  const { t } = useT();
+  const { paper, setSpreadMode } = useWs();
+  const mode = paper.spreadMode ?? "none";
+  const opts = [
+    { v: "none", badge: "0", name: t("trade.spreadNone"), sub: t("set.spreadNoneSub") },
+    { v: "mt5", badge: String(MT5_SPREAD_POINTS), name: t("trade.spreadMt5", { pts: MT5_SPREAD_POINTS }), sub: t("set.spreadMt5Sub", { pts: MT5_SPREAD_POINTS }) },
+  ] as const;
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-muted">{t("trade.spread")}</div>
+      <div role="radiogroup" aria-label={t("trade.spread")} className="grid grid-cols-2 gap-2">
+        {opts.map((o) => {
+          const on = mode === o.v;
+          return (
+            <Choice key={o.v} on={on} onClick={() => setSpreadMode(o.v)} label={o.name}>
+              <span className="flex items-center gap-2.5 px-1 py-0.5 text-left">
+                <span className={`num grid h-8 w-8 shrink-0 place-items-center rounded-md text-xs font-bold ${on ? "bg-gold text-on-gold" : "bg-panel-3 text-muted"}`}>{o.badge}</span>
+                <span className="min-w-0">
+                  <span className={`block truncate ${on ? "font-medium text-ink" : "text-ink-2"}`}>{o.name}</span>
+                  <span className="block text-xs text-muted">{o.sub}</span>
+                </span>
+              </span>
+            </Choice>
+          );
+        })}
+      </div>
+      <p className="text-xs leading-relaxed text-muted">{t("set.spreadSub", { pts: MT5_SPREAD_POINTS })}</p>
     </div>
   );
 }

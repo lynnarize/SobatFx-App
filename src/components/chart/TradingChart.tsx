@@ -6,8 +6,10 @@ import {
   CrosshairMode,
   HistogramSeries,
   LineSeries,
+  LineStyle,
   createChart,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
@@ -41,7 +43,7 @@ import { ema } from "@/lib/market/indicators";
 import { type FeedStatus, feedStatus, setVenue, subscribeCandles, subscribePrice, subscribeStatus, subscribeVenue, venueOf } from "@/lib/market/live";
 import { fmtMoney, positionSize } from "@/lib/market/risk";
 import { type Candle, getInstrument, intervalSec } from "@/lib/market/symbols";
-import { kindKey } from "@/lib/paper";
+import { MT5_SPREAD_POINTS, kindKey, spreadFor } from "@/lib/paper";
 import type { DrawingTool, MagnetMode } from "@/lib/opencharts/constants";
 import { DrawingToolsManager } from "@/lib/opencharts/drawing-tools/manager";
 import { CHART_THEME } from "@/lib/theme";
@@ -120,6 +122,15 @@ export function TradingChart() {
     () => "offline" as FeedStatus,
   );
   const lastTick = useRef<number | null>(null);
+  // MT5-style spread: the candles are the Bid, a dotted Ask line sits `spread` above the last price.
+  const spread = spreadFor(paper.spreadMode, inst);
+  const askLine = useRef<IPriceLine | null>(null);
+  const spreadRef = useRef(spread);
+  const syncAsk = useCallback(() => {
+    const last = candlesRef.current.at(-1);
+    const on = last != null; // hidden between a symbol switch and its first candles
+    askLine.current?.applyOptions({ price: on ? last.close + spreadRef.current : 0, lineVisible: on, axisLabelVisible: on });
+  }, []);
   const [stale, setStale] = useState(false);
 
   // Latest values for callbacks created once with the chart.
@@ -231,6 +242,20 @@ export function TradingChart() {
     };
   }, [registerChart]);
 
+  // Ask line while the MT5-style spread is on (never on crypto, see spreadFor).
+  const askTitle = t("trade.askLine", { pts: MT5_SPREAD_POINTS });
+  useEffect(() => {
+    const s = seriesRef.current;
+    spreadRef.current = spread;
+    if (!s || !spread) return;
+    askLine.current = s.createPriceLine({ price: 0, color: "#e0453c", lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true, title: askTitle });
+    syncAsk();
+    return () => {
+      if (askLine.current) s.removePriceLine(askLine.current);
+      askLine.current = null;
+    };
+  }, [spread, askTitle, syncAsk]);
+
   // ── keep the drawing manager in sync ──
   useEffect(() => {
     managerRef.current?.setDrawings(drawings);
@@ -319,6 +344,7 @@ export function TradingChart() {
     let pollTimer = 0;
     const s = seriesRef.current!;
     candlesRef.current = [];
+    syncAsk();
 
     const recalcEma = () => {
       const c = candlesRef.current;
@@ -342,6 +368,7 @@ export function TradingChart() {
           s.setData(next.map(toBar));
           volRef.current?.setData(next.some((c) => c.volume) ? next.map(volBar) : []);
           s.applyOptions({ priceFormat: { type: "price", precision: inst.digits, minMove: 1 / 10 ** inst.digits } });
+          syncAsk();
           resetView();
           first = false;
         } else {
@@ -352,6 +379,7 @@ export function TradingChart() {
           if (liveBar) merged.push(liveBar);
           candlesRef.current = merged;
           s.setData(merged.map(toBar));
+          syncAsk();
           if (merged.some((c) => c.volume)) volRef.current?.setData(merged.map(volBar));
         }
         recalcEma();
@@ -405,6 +433,7 @@ export function TradingChart() {
       pendingCandle = null;
       if (!bar) return;
       s.update(toBar(bar));
+      syncAsk();
       dirty.current = true;
     };
     const queue = () => {
@@ -436,7 +465,7 @@ export function TradingChart() {
       cancelAnimationFrame(raf);
       unsub();
     };
-  }, [symbol, interval, inst, barSec, venue, setCandles, setSource, resetView]);
+  }, [symbol, interval, inst, barSec, venue, setCandles, setSource, resetView, syncAsk]);
 
   // No ticks for 30s (weekend / quiet market) → say so instead of "LIVE".
   useEffect(() => {
