@@ -483,7 +483,7 @@ test("surprise: beat/miss judged by usual effect, units parsed", () => {
 });
 
 // ── Actuals from release headlines ──
-import { matchRelease, parseRelease } from "../src/lib/releases";
+import { matchRelease, parseRelease, parseReleases } from "../src/lib/releases";
 
 test("release headlines parse: actual, expected, prior, units, period", () => {
   const p = (s: string) => {
@@ -549,6 +549,74 @@ test("release headlines match the right calendar event, or none", () => {
   assert.deepEqual(mr("Fed cuts rates by 25 bps to 3.75%-4.00%", "2026-10-28T18:00:00Z"), ["Federal Funds Rate", 4]);
   assert.equal(mr("Traders bet the Fed will cut rates to 3.75%", "2026-10-28T18:05:00Z"), null, "expectations aren't decisions");
   assert.deepEqual(mr("RBA raises cash rate to 4.60%", "2026-09-28T04:31:00Z"), [null, 4.6], "a day before the meeting: no match");
+});
+
+test("release posts: body lines, other phrasings and the weaker forms match safely", () => {
+  const e = (time: string, currency: string, title: string, forecast: string, previous = "") => ({ time, currency, title, forecast, previous });
+  const nfp = "2026-10-02T12:30:00.000Z";
+  const cal = [
+    e(nfp, "USD", "Non-Farm Employment Change", "90K", "162K"),
+    e(nfp, "USD", "Unemployment Rate", "4.1%", "4.1%"),
+    e(nfp, "USD", "Average Hourly Earnings m/m", "0.3%", "0.3%"),
+    e("2026-10-01T14:00:00.000Z", "USD", "ISM Manufacturing PMI", "55.0", "54.6"),
+    e("2026-10-01T14:00:00.000Z", "USD", "ISM Manufacturing Prices", "72.3", "71.1"),
+    e("2026-10-01T12:30:00.000Z", "USD", "Unemployment Claims", "200K", "197K"),
+    e("2026-10-01T13:30:00.000Z", "CAD", "S&P Global Manufacturing PMI", "", "53.0"),
+    e("2026-10-02T09:00:00.000Z", "EUR", "CPI Flash Estimate y/y", "3.6%", "3.2%"),
+    e("2026-10-02T09:00:00.000Z", "EUR", "Core CPI Flash Estimate y/y", "2.5%", "2.4%"),
+    e("2026-09-30T23:30:00.000Z", "JPY", "Tokyo Core CPI y/y", "2.4%", "1.8%"),
+    e("2026-09-30T23:30:00.000Z", "JPY", "Unemployment Rate", "2.4%", "2.4%"),
+  ];
+  // Every event a post's figures land on (title + body lines), strongest first as the server does.
+  const hits = (title: string, body: string, at: string) => {
+    const out: Record<string, number> = {};
+    for (const r of parseReleases(title, body)) {
+      const ev = matchRelease(r, at, cal);
+      if (ev && !(ev.currency + ev.title in out)) out[ev.currency + ev.title] = r.actual;
+    }
+    return out;
+  };
+  // Real InvestingLive NFP post: the unemployment rate and wages are only in the body.
+  assert.deepEqual(
+    hits(
+      "US September non-farm payrolls +29K vs +90K expected",
+      ["Prior was +162K (revised to +133K)", "Two-month net revision -60K", "Unemployment rate 4.2% vs 4.1% expected", "Prior unemployment rate 4.1%", "Unrounded unemployment 4.1753% vs 4.1413% prior", "Participation rate 61.8% vs 61.6% prior", "Average hourly earnings +0.1% m/m vs +0.3% expected", "Average hourly earnings 3.0% y/y vs +3.2% expected", "Change in private payrolls +46K vs +85K expected", "Government payrolls -17K vs +35K prior"].join("\n"),
+      "2026-10-02T12:31:00Z",
+    ),
+    { "USDNon-Farm Employment Change": 29_000, "USDUnemployment Rate": 4.2, "USDAverage Hourly Earnings m/m": 0.1 },
+  );
+  // Body-only: without the title, private payrolls must not become NFP, nor unrounded the rate.
+  assert.deepEqual(hits("Jobs data", "Change in private payrolls +46K vs +85K expected\nUnrounded unemployment 4.1753% vs 4.1413% prior", "2026-10-02T12:31:00Z"), {});
+  // ISM post: prices paid from the body; "Employment 52.7 vs 51.2 prior" must not become the PMI.
+  assert.deepEqual(
+    hits("US September ISM manufacturing 54.5 vs 55.0 expected", "Prior reading was 54.6\nNew orders 55.3 vs 53.7 prior\nEmployment 52.7 vs 51.2 prior\nPrices paid 77.9 vs 72.3 expected -- highest since May", "2026-10-01T14:00:00Z"),
+    { "USDISM Manufacturing PMI": 54.5, "USDISM Manufacturing Prices": 77.9 },
+  );
+  assert.deepEqual(hits("Prices", "Employment 52.7 vs 54.6 prior", "2026-10-01T14:00:00Z"), {}, "no 'pmi' in the line");
+  // Continuing claims has the right words but the wrong size.
+  assert.deepEqual(hits("US weekly initial jobless claims 197K vs 200K expected", "Continuing claims 1.701m vs 1.725m expected", "2026-10-01T12:31:00Z"), { "USDUnemployment Claims": 197_000 });
+  // "vs X prior": accepted only when X is FF's previous.
+  assert.deepEqual(hits("Canada Sept S&P Global manufacturing PMI 51.5 vs 53.0 prior", "", "2026-10-01T13:31:00Z"), { "CADS&P Global Manufacturing PMI": 51.5 });
+  assert.deepEqual(hits("Canada Sept S&P Global manufacturing PMI 51.5 vs 49.0 prior", "", "2026-10-01T13:31:00Z"), {}, "prior disagrees with FF");
+  // FXStreet's "beats X estimates", and "jumps to" titles.
+  assert.deepEqual(hits("Eurozone flash HICP rises faster by 3.8% YoY in September, beats 3.6% estimates", "", "2026-10-02T09:01:00Z"), { "EURCPI Flash Estimate y/y": 3.8 });
+  assert.deepEqual(hits("Eurozone inflation jumps to 3.8% in September as energy prices surge", "", "2026-10-02T09:05:00Z"), { "EURCPI Flash Estimate y/y": 3.8 });
+  assert.deepEqual(hits("Eurozone inflation seen rising to 3.8% in September", "", "2026-10-02T09:05:00Z"), {}, "a forecast, not data");
+  assert.deepEqual(hits("Inflation jumps to 3.8% in September", "", "2026-10-02T09:05:00Z"), {}, "no country named");
+  // Japan's split layout: "Core 2.7%" on one line, "expected 2.4%, prior 1.8%" on the next.
+  assert.deepEqual(
+    hits("Japan September Tokyo CPI data surges ahead of expectations and August", "Japan Tokyo CPI (Sep YY)\nHeadline 2.7%\nexpected 2.5%, prior 1.9%\nCore 2.7%\nexpected 2.4%, prior 1.8%\nUnemployment Rate (August) 2.5%\nexpected 2.4%, prior 2.4%", "2026-09-30T23:31:00Z"),
+    { "JPYTokyo Core CPI y/y": 2.7, "JPYUnemployment Rate": 2.5 },
+  );
+  // Real false positives seen in the feeds:
+  assert.equal(parseRelease("2:00 a.m. — German factory orders for August. Est -1.0% vs 2.5% last month"), null, "an estimate, not an actual");
+  assert.deepEqual(hits("US weekly initial jobless claims 197K vs 200K expected", "Four-week moving average 200.0K vs 197K prior", "2026-10-01T12:31:00Z"), { "USDUnemployment Claims": 197_000 });
+  assert.deepEqual(hits("US weekly initial jobless claims", "Four-week moving average 200.0K vs 197K prior", "2026-10-01T12:31:00Z"), {}, "an average isn't the weekly figure");
+  assert.deepEqual(hits("investingLive Americas FX news wrap", "Unemployment rate: 4.2% versus 4.1% expected", "2026-10-02T12:40:00Z"), {}, "no country anywhere: could be any currency");
+  assert.deepEqual(hits("Preview: September non-farm payrolls by the numbers", "Unemployment rate 4.2% vs 4.1% expected", "2026-10-02T12:31:00Z"), {}, "preview bodies are skipped");
+  assert.equal(parseRelease("US unemployment rate rises to 4.2%"), null, "the loose form is opt-in (titles only)");
+  assert.equal(parseRelease("US unemployment rate rises to 4.2%", { loose: true })?.actual, 4.2);
+  assert.equal(parseRelease("Fed's Waller says unemployment rate rises to 4.5% next year", { loose: true }), null);
 });
 
 // ── Calendar event detail ──

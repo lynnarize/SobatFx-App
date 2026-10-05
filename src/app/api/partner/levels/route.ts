@@ -28,7 +28,7 @@ const CANDLES_OUT = 120;
 
 const Body = z.object({
   symbol: z.string().max(20),
-  interval: z.enum(["15m", "1h", "4h", "1d"]).default("1h"),
+  interval: z.enum(["5m", "15m", "1h", "4h", "1d"]).default("1h"),
   side: z.enum(["BUY", "SELL"]).optional(),
   entryLow: z.number().positive().finite().optional(),
   entryHigh: z.number().positive().finite().optional(),

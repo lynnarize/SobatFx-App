@@ -4,7 +4,7 @@ import { kv } from "./store";
 import { loadHistories, loadPreviews, measureReaction, saveHistory, savePreviews } from "./event-history";
 import { INSTRUMENTS } from "./market/symbols";
 import { type HistRec, type Outlook, type Reaction, leadTitles, outlookFor, summarizeReactions } from "./outlook";
-import { PREVIEW_WINDOW, matchRelease, parsePreview, parseRelease } from "./releases";
+import { PREVIEW_WINDOW, type Release, matchRelease, parsePreview, parseReleases } from "./releases";
 import { releaseTtl } from "./release-window";
 import { type UsualEffect, pairDirection, parseValue, surprise, usualEffect } from "./usual-effect";
 
@@ -45,6 +45,9 @@ export interface Headline {
   tags: string[];
   impact: "High" | "Medium" | "Low";
 }
+
+/** Server-side only: the post's body as plain text lines, where data posts list their secondary figures. */
+type FeedItem = Headline & { body: string };
 
 const UA = "Mozilla/5.0 (compatible; SobatFX/1.0)";
 
@@ -87,14 +90,18 @@ function display(e: CalendarEvent, v: number) {
  * feeds — free, and usually posted within minutes. Matches are kept in the store for the week,
  * because headlines roll out of the feeds after a few hours.
  */
-async function headlineActuals(cal: CalendarEvent[], heads: Headline[]) {
+async function headlineActuals(cal: CalendarEvent[], heads: FeedItem[]) {
   const stored = (await kv.get<Record<string, number>>("actuals:rss")) ?? {};
   const open = cal.filter((e) => !(eventKey(e) in stored) && isNumeric(e) && Date.parse(e.time) <= Date.now());
+  if (!open.length) return stored;
+  // Strongest evidence first, so a weaker line can't claim an event a headline states outright.
+  const rank = (r: Release) => (r.expected != null ? (r.fromBody ? 1 : 0) : r.prior != null ? 2 : 3);
+  const found = heads.flatMap((h) => parseReleases(h.title, h.body).map((r) => ({ r, time: h.time })));
+  found.sort((a, b) => rank(a.r) - rank(b.r));
   let added = 0;
-  for (const h of heads) {
-    const r = parseRelease(h.title);
-    const e = r && matchRelease(r, h.time, open);
-    if (!r || !e || eventKey(e) in stored) continue;
+  for (const { r, time } of found) {
+    const e = matchRelease(r, time, open);
+    if (!e || eventKey(e) in stored) continue;
     stored[eventKey(e)] = r.actual;
     added++;
   }
@@ -180,7 +187,7 @@ export function getCalendar() {
   // 2 min (15 s around a release): each run costs a few Redis commands.
   return cached("calendar+actuals", () => releaseTtl(lastCal, 120, 15), async () => {
     const ff = await ffCalendar();
-    const heads = await getHeadlines().catch(() => [] as Headline[]);
+    const heads = await feedItems().catch(() => [] as FeedItem[]);
     const warn = (what: string) => (e: unknown) => (console.warn(`[news] ${what}`, (e as Error).message), {});
     const [fromHeads, previews] = await Promise.all([
       headlineActuals(ff, heads).catch(warn("headline actuals")) as Promise<Record<string, number>>,
@@ -224,7 +231,20 @@ function tagText(t: string) {
   return { tags, impact: (HIGH.test(t) ? "High" : MED.test(t) ? "Medium" : "Low") as Headline["impact"] };
 }
 
-async function feed(source: string, url: string): Promise<Headline[]> {
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+
+/** RSS description HTML → plain text, one line per paragraph / list item. */
+function bodyText(html: string) {
+  return html
+    .replace(/<\s*(?:br|\/?p|\/?li|\/?div|\/?h\d)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (m, e: string) =>
+      e[0] !== "#" ? (ENTITIES[e.toLowerCase()] ?? m) : String.fromCodePoint(e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : +e.slice(1)),
+    )
+    .slice(0, 4000);
+}
+
+async function feed(source: string, url: string): Promise<FeedItem[]> {
   const r = await fetch(url, { headers: { "user-agent": UA }, cache: "no-store", signal: AbortSignal.timeout(8_000) });
   if (!r.ok) throw new Error(`${source} ${r.status}`);
   const xml = await r.text();
@@ -237,11 +257,17 @@ async function feed(source: string, url: string): Promise<Headline[]> {
       const title = String(it.title ?? "").replace(/<[^>]+>/g, "").trim();
       const link = String(it.link).trim();
       const time = new Date(String(it.pubDate ?? it["dc:date"] ?? Date.now())).toISOString();
-      return { id: link, title, link, source, time, ...tagText(title + " " + String(it.description ?? "").slice(0, 300)) };
+      const body = typeof it.description === "string" ? bodyText(it.description) : "";
+      return { id: link, title, link, source, time, body, ...tagText(title + " " + body.slice(0, 300)) };
     });
 }
 
-export function getHeadlines() {
+/** Headlines as sent to clients and the AI prompt (no bodies). */
+export async function getHeadlines(): Promise<Headline[]> {
+  return (await feedItems()).map(({ id, title, link, source, time, tags, impact }) => ({ id, title, link, source, time, tags, impact }));
+}
+
+function feedItems() {
   return cached("headlines", () => releaseTtl(lastCal, 300, 30), async () => {
     const all = await Promise.allSettled(FEEDS.map((f) => feed(f.source, f.url)));
     const seen = new Set<string>();

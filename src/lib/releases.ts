@@ -4,6 +4,10 @@
 //   "Australian August Headline CPI 4% (vs. expected 4%, prior 3.5%)"
 // A headline only counts as a release when it states the expected value, and it is only attached
 // to a calendar event when currency, wording, timing and the expected value all agree with it.
+// Data posts also list secondary figures in their body ("Unemployment rate 4.2% vs 4.1% expected"
+// under the payrolls headline); those lines are read too, under stricter matching. Two weaker forms
+// need more proof: "51.5 vs 53.0 prior" (the prior must equal FF's previous) and, in titles only,
+// "inflation jumps to 3.8%" (every word of the event named, value near the forecast).
 // A wrong actual is worse than none, so anything ambiguous is dropped.
 
 import { parseValue, usualEffect } from "./usual-effect";
@@ -13,12 +17,15 @@ export interface Release {
   currency?: string;
   /** Values in absolute units (7.079M → 7_079_000; 4% → 4). */
   actual: number;
-  expected: number;
+  /** Consensus stated in the text; undefined for the weaker "vs X prior" / "rises to X" forms. */
+  expected?: number;
   prior?: number;
   /** Period stated in the headline, when it says one. */
   period?: "m/m" | "y/y" | "q/q";
   /** A central-bank rate decision ("RBA raises cash rate to 4.60%"): matched to the policy-rate event. */
   rate?: boolean;
+  /** Read from a post's body line rather than its title: matched more strictly. */
+  fromBody?: boolean;
   text: string;
 }
 
@@ -52,8 +59,21 @@ const EXPECTED = [
   new RegExp(String.raw`\b(?:vs\.?|versus)\s*${KW}\s*${NUM}`, "i"), // "vs. expected 51.6"
   new RegExp(String.raw`\b(?:vs\.?|versus)\s*${NUM}${PERIOD}\s*${KW}`, "i"), // "vs 89.2 expected"
   new RegExp(String.raw`\(\s*${KW}\s*:?\s*${NUM}`, "i"), // "(expected 50.1"
+  new RegExp(String.raw`\b(?:beats?|beating|misses?|missing|tops?|topping|exceeds?|exceeding|above|below|against)\s*(?:the\s*)?${NUM}${PERIOD}\s*${KW}`, "i"), // "beats 3.6% estimates"
+  new RegExp(String.raw`(?<=\d(?:%|[kmbt]|million|mln|billion|bn|thousand)?\s*,?\s*)\b${KW}\s*:?\s*${NUM}`, "i"), // "2.7% expected 2.5%"
 ];
 const PRIOR = new RegExp(String.raw`\b(?:prior|previous|prev\.?)\s*(?:was\s*|:\s*)?${NUM}`, "i");
+// "51.5 vs 53.0 prior": no consensus, so the prior has to prove which event it is.
+const VS_PRIOR = new RegExp(String.raw`\b(?:vs\.?|versus)\s*${NUM}${PERIOD}\s*(?:prior|previous|prev\.?|last month)\b`, "i");
+// "inflation jumps to 3.8%", "unemployment rate unchanged at 4.1%" (titles only).
+const MOVED = new RegExp(
+  String.raw`\b(?:rises?|rose|risen|falls?|fell|fallen|climbs?|climbed|jumps?|jumped|drops?|dropped|slips?|slipped|eases?|eased|(?:edges?|edged|ticks?|ticked) (?:up|down|higher|lower)|increases?|increased|decreases?|decreased|declines?|declined|accelerates?|accelerated|slows?|slowed|surges?|surged|soars?|soared|plunges?|plunged|cools?|cooled|(?:holds?|held|remains?|remained|stays?|stayed)(?: steady| unchanged)?|steady|unchanged|flat)\s+(?:to|at)\s+${NUM}`,
+  "i",
+);
+// Forecasts, previews, quotes and bets aren't releases.
+// "Est -1.0% vs 2.5% last month" (a calendar preview): the figure before "vs" is the estimate.
+const KW_FIGURE = new RegExp(String.raw`\b${KW}\s*:?\s*[-+]?\d`, "i");
+const NOT_DATA = /\b(preview|seen|expect(?:s|ed)? to|could|may|might|will|would|likely|set to|poised|ahead of|bets?|odds|pric(?:e|es|ing) in|if|forecasts?|says|said|sees|warns|according to)\b/i;
 
 const MULT: Record<string, number> = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, mln: 1e6, b: 1e9, bn: 1e9, billion: 1e9, t: 1e12 };
 const value = (n: string, unit?: string) => +n * (MULT[(unit ?? "").toLowerCase()] ?? 1);
@@ -71,13 +91,30 @@ const COUNTRIES: [string, RegExp][] = [
 // Countries without an app currency: never match those headlines to anything.
 const OTHER = /\b(China|Chinese|India|Indian|Korea|Korean|Brazil|Mexic|Singapore|Hong Kong|Taiwan|South Africa|Russia|Turkey|Sweden|Swedish|Norway|Norwegian)\b/i;
 
-export function parseRelease(title: string): Release | null {
+/** `loose` also accepts "inflation jumps to 3.8%" (no consensus); only for titles, never body lines. */
+export function parseRelease(title: string, opts?: { loose?: boolean }): Release | null {
   const t = title.replace(/(\d),(\d{3})\b/g, "$1$2");
   let m: RegExpExecArray | null = null;
   for (const re of EXPECTED) if ((m = re.exec(t))) break;
-  if (!m) return parseRateDecision(t);
-  // The actual is the last plain number before the expected value.
-  const before = t.slice(0, m.index);
+  if (m) return build(t, title, t.slice(0, m.index), value(m[1], m[2]));
+  const rate = parseRateDecision(t);
+  if (rate) return rate;
+  const vp = VS_PRIOR.exec(t);
+  if (vp && !NOT_DATA.test(t) && !KW_FIGURE.test(t.slice(0, vp.index))) {
+    const r = build(t, title, t.slice(0, vp.index));
+    return r && { ...r, prior: value(vp[1], vp[2]) };
+  }
+  if (!opts?.loose) return null;
+  const mv = MOVED.exec(t);
+  if (!mv || NOT_DATA.test(t) || KW_FIGURE.test(t) || BANKS.some(([, re]) => re.test(t))) return null;
+  // Only the words up to the figure describe it ("…jumps to 3.8%", not "…as energy prices surge").
+  const named = t.slice(0, mv.index + mv[0].length);
+  const r = build(t, named, named);
+  return r?.currency ? r : null;
+}
+
+/** The actual is the last plain number in `before` (the text up to the expected/prior value). */
+function build(t: string, title: string, before: string, expected?: number): Release | null {
   const nums = [...before.matchAll(new RegExp(NUM, "gi"))].filter((x) => x[2] || !/^\d{4}$/.test(x[1]) || +x[1] < 1900 || +x[1] > 2100);
   const a = nums.at(-1);
   if (!a) return null;
@@ -88,11 +125,57 @@ export function parseRelease(title: string): Release | null {
   return {
     currency: found[0]?.[0],
     actual: value(a[1], a[2]),
-    expected: value(m[1], m[2]),
+    expected,
     prior: prior ? value(prior[1], prior[2]) : undefined,
     period,
     text: title,
   };
+}
+
+/** What a data post is about, from its title: "US September non-farm payrolls" (cut at the first figure or clause). */
+export const releaseSubject = (title: string) => title.split(/(?<![A-Za-z])[-+]?\d|[:;(]|\s(?:as|after|amid|ahead|while|but|despite|vs\.?|versus)\s/i)[0].trim();
+
+const KW_LINE = new RegExp(String.raw`^${KW}\b`, "i");
+
+/**
+ * Every release figure in a post: its title, then each body line. A line that names no country
+ * ("Unemployment rate 4.2% vs 4.1% expected") is read under the title's subject.
+ */
+// Previews and calendars list estimates and last week's figures, not today's releases.
+const PREVIEW_POST = /\bpreview\b|\b(?:week|day) ahead\b|\bwhat to (?:watch|expect)\b|\bwhat's expected\b|\bmain events\b|\bcalendar\b/i;
+
+export function parseReleases(title: string, body = ""): Release[] {
+  const out: Release[] = [];
+  const head = parseRelease(title, { loose: true });
+  if (head) out.push(head);
+  if (PREVIEW_POST.test(title)) return out;
+  const subject = releaseSubject(title);
+  // "Headline 2.7%" / "expected 2.5%, prior 1.9%" arrive as two lines: rejoin them.
+  const lines: string[] = [];
+  for (const raw of body.split(/\n+/)) {
+    const l = raw.replace(/\s+/g, " ").trim();
+    if (!l) continue;
+    if (KW_LINE.test(l) && lines.length) lines[lines.length - 1] += ` ${l}`;
+    else lines.push(l);
+  }
+  const subjectCur = OTHER.test(subject) ? null : COUNTRIES.find(([, re]) => re.test(subject))?.[0];
+  for (const line of lines) {
+    if (line.length > 220) continue;
+    const own = parseRelease(line);
+    if (!own || own.rate) continue;
+    if (own.currency) {
+      out.push({ ...own, fromBody: true });
+      continue;
+    }
+    if (!subjectCur) continue;
+    // The line under the title's country ("Unemployment Rate (August) 2.5%" in a Japan post), then
+    // with the title's subject for its event words ("Prices paid …" under "US ISM manufacturing").
+    out.push({ ...own, currency: subjectCur, fromBody: true });
+    // A body line must end up with a country: "Unemployment rate 4.2%" alone could be any currency's.
+    const withSubject = parseRelease(`${subject} ${line}`);
+    if (withSubject?.currency) out.push({ ...withSubject, fromBody: true });
+  }
+  return out;
 }
 
 // A preview's figure: "CPI preview: headline inflation seen at 4.0%", "economists expect +90K".
@@ -125,7 +208,7 @@ const SYN: [RegExp, string][] = [
   [/\b(unemployment|jobless) rate\b/g, " unemployment "],
   [/\bjob openings\b|\bjolts\b/g, " jolts "],
   [/\b(average )?hourly earnings\b/g, " earnings "],
-  [/\bconsumer price index\b|\bcpi\b/g, " cpi "],
+  [/\bconsumer price index\b|\bcpi\b|\bhicp\b|\binflation\b(?! expectations)/g, " cpi "],
   [/\bproducer price index\b|\bppi\b/g, " ppi "],
   [/\bgross domestic product\b|\bgdp\b/g, " gdp "],
   [/\bpurchasing managers'? index\b|\bpmi\b/g, " pmi "],
@@ -138,7 +221,7 @@ const SYN: [RegExp, string][] = [
 // Words that say nothing about which release it is.
 const STOP = new Set("cb final prelim preliminary flash advance revised second third estimate change index sa nsa the of in a an for to and is at on month monthly quarter quarterly annual annualized headline data report reading level rise rises fall falls m y q us uk eurozone euro area australian australia canada canadian japan japanese german germany french france swiss new zealand nz jan feb mar apr may jun jul aug sep sept oct nov dec january february march april june july august september october november december".split(" "));
 // Qualifiers that must agree on both sides (Core PCE ≠ PCE, ADP ≠ NFP, German CPI ≠ Eurozone CPI).
-const AGREE: RegExp[] = [/\bcore\b/, /\btrimmed\b/, /\bmedian\b/, /\bcommon\b/, /\bservices?\b/, /\bmanufacturing\b/, /\badp\b/, /\bgerman/, /\bfrench\b|\bfrance\b/, /\bital/, /\bspain\b|\bspanish\b/, /\btokyo\b/, /\bprices?\b/, /\bexpectations\b/];
+const AGREE: RegExp[] = [/\bcore\b/, /\btrimmed\b/, /\bmedian\b/, /\bcommon\b/, /\bservices?\b/, /\bmanufacturing\b/, /\badp\b/, /\bgerman/, /\bfrench\b|\bfrance\b/, /\bital/, /\bspain\b|\bspanish\b/, /\btokyo\b/, /\bprices?\b/, /\bexpectations\b/, /\bprivate\b/, /\bgovernment\b/, /\bcontinuing\b/, /\bunrounded\b/, /\bu6\b|\bunderemployment\b/, /\bparticipation\b/, /\baverage\b/, /\bfour-week\b|\b4-week\b/];
 
 const norm = (s: string) => {
   let x = ` ${s.toLowerCase()} `;
@@ -185,13 +268,25 @@ export function matchRelease<E extends EventLike>(r: Release, headlineTime: stri
     const want = [...tokens(e.title)];
     if (!want.length) return [];
     const score = want.filter((w) => head.has(w)).length / want.length;
-    if (score < 0.6) return [];
-    // The headline's consensus must be close to FF's forecast: rules out m/m vs y/y and look-alike releases.
+    // A title with a consensus may paraphrase; body lines and the weaker forms must name every word.
+    if (score < (r.expected != null && !r.fromBody ? 0.6 : 1)) return [];
     const f = parseValue(e.forecast), p = parseValue(e.previous);
     const refV = f ?? p;
     if (refV == null) return [];
-    const gap = Math.abs((f != null ? r.expected : r.actual) - refV);
-    if (gap > Math.max(Math.abs(refV) * (f != null ? 0.3 : 1), f != null ? 0.2 : 0.5)) return [];
+    let gap: number;
+    if (r.expected != null) {
+      // The headline's consensus must be close to FF's forecast: rules out m/m vs y/y and look-alike releases.
+      gap = Math.abs((f != null ? r.expected : r.actual) - refV);
+      if (gap > Math.max(Math.abs(refV) * (f != null ? 0.3 : 1), f != null ? 0.2 : 0.5)) return [];
+    } else if (r.prior != null) {
+      // "vs 53.0 prior": the stated prior must be FF's previous (one tick or 5% of slack).
+      if (p == null || Math.abs(r.prior - p) > Math.max(Math.abs(p) * 0.05, 0.11)) return [];
+      gap = Math.abs(r.actual - refV);
+    } else {
+      // "jumps to 3.8%": a named country and a value near the forecast.
+      gap = Math.abs(r.actual - refV);
+      if (!r.currency || gap > Math.max(Math.abs(refV) * 0.5, 0.5)) return [];
+    }
     return [{ e, score, gap: gap / Math.max(Math.abs(refV), 0.1), dt: Math.abs(ht - et) }];
   });
   scored.sort((a, b) => b.score - a.score || a.gap - b.gap || a.dt - b.dt);
