@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { contextBlock, systemPrompt } from "../src/lib/ai/prompt";
+import { APP_LOT, contextBlock, systemPrompt } from "../src/lib/ai/prompt";
+import { planGuardrails } from "../src/lib/ai/guardrails";
 import { scrub, streamScrubber } from "../src/lib/ai/sanitize";
 import { formatMtf, higherTimeframes, summarizeTf } from "../src/lib/ai/mtf";
 import { type Drawing, asksForDrawing, extractDrawings } from "../src/lib/drawings";
@@ -172,6 +173,10 @@ test("scrub removes model names", () => {
 test("scrub also removes the hosting vendors behind Free and Pro", () => {
   const s = scrub("Built by OpenAI, Alibaba Cloud, inclusionAI (Ant Group), NVIDIA and xAI; I am Ling 3.0 flash and Grok-4 via DashScope.");
   assert.ok(!/openai|alibaba|inclusionai|ant group|nvidia|xai|ling|grok|dashscope/i.test(s), s);
+});
+test("scrub removes the Pro model and its maker", () => {
+  const s = scrub("I'm MiMo-V2.6-Pro from Xiaomi, not Inkling by Thinking Machines.");
+  assert.ok(!/mimo|xiaomi|inkling|thinking machines/i.test(s), s);
 });
 test("stream scrubber catches names split across chunks", () => {
   const sc = streamScrubber();
@@ -500,6 +505,43 @@ test("multi-timeframe: paid prompts teach top-down use, Free never sees the bloc
   for (const t of ["pro", "ultimate"] as const) assert.match(systemPrompt(t), /MULTI-TIMEFRAME/);
   assert.doesNotMatch(systemPrompt("free"), /MULTI-TIMEFRAME|Higher-timeframe view/);
   assert.match(contextBlock({ symbol: "XAUUSD", symbolName: "Gold", interval: "1h" }, "news", false, "en", "", "Higher-timeframe view of XAUUSD"), /Higher-timeframe view of XAUUSD/);
+});
+test("Pro: the app sizes the lot; Ultra keeps the lot maths", () => {
+  const pro = systemPrompt("pro"), ultra = systemPrompt("ultimate");
+  assert.ok(pro.includes(APP_LOT));
+  assert.doesNotMatch(pro, /Show your lot-size maths|\*\*Position size\*\*/);
+  assert.match(ultra, /Show your lot-size maths briefly/);
+  assert.match(ultra, /\*\*Position size\*\*/);
+  assert.equal(systemPrompt("pro", { appLot: false }).includes(APP_LOT), false);
+  const ctx = { symbol: "BTCUSD", symbolName: "Bitcoin", interval: "15m", lastPrice: 84640, indicators: { pipSize: 1 }, risk: { balance: 1000, riskPct: 1, currency: "USD", pipValue: 1 } };
+  const app = contextBlock(ctx, "news", false, "en", "", "", { appLot: true });
+  assert.match(app, /= 10 USD at risk\. The app sizes the lot from your entry and SL — don't calculate it\./);
+  assert.doesNotMatch(app, /Lot sizing/);
+  assert.match(contextBlock(ctx, "news", false, "en"), /Lot sizing for BTCUSD/);
+});
+test("plan guardrails: min stop, buffers, stretch and nearest levels in ATR", () => {
+  const candles: [number, number, number, number, number][] = [[1, 100, 101, 99, 100.5], [2, 100.5, 102, 100, 101.5], [3, 101.5, 103, 101, 102.5], [4, 102.5, 102.8, 101.2, 101.8], [5, 101.8, 104, 101.5, 103.8]];
+  const ctx = {
+    symbol: "BTCUSD", symbolName: "Bitcoin", interval: "15m", lastPrice: 100, candles,
+    indicators: { ATR14: 10, EMA20: 90, EMA50: 85 },
+    swings: { highs: [{ time: 1, price: 112 }, { time: 2, price: 125 }], lows: [{ time: 1, price: 95 }] },
+  };
+  const g = planGuardrails(ctx, [{ iv: "1h", highs: [113, 140], lows: [70] }]);
+  assert.match(g, /ATR14 = 10 → minimum SL distance 10 \(1 ATR\); structure buffer ≈ 2\.5 \(0\.25 ATR\); TP buffer in front of a level ≈ 1–2/);
+  assert.match(g, /vs EMA20 \+1\.0 ATR, vs EMA50 \+1\.5 ATR/);
+  assert.match(g, /Last 5 candles: 4 up \/ 1 down, 3\/4 higher highs, 4\/4 higher lows/);
+  // Nearest first; 1h 113 is within 0.2 ATR of the 15m 112, so it is skipped.
+  assert.match(g, /Nearest levels above 100: 112 \(15m swing high, \+1\.2 ATR\) · 125 \(15m swing high, \+2\.5 ATR\) · 140 \(1h swing high, \+4\.0 ATR\)$/m);
+  assert.match(g, /Nearest levels below 100: 95 \(15m swing low, −0\.5 ATR\) · 85 \(15m EMA50, −1\.5 ATR\) · 70 \(1h swing low, −3\.0 ATR\)$/m);
+  assert.equal(planGuardrails({ ...ctx, indicators: {} }), "", "no ATR → no guardrails");
+  // The guardrails go right before the risk line.
+  assert.match(contextBlock({ ...ctx, risk: { balance: 1000, riskPct: 1, currency: "USD" } }, "n", false, "en", "", "", { guardrails: g, appLot: true }), /Nearest levels below[^\n]*\nUser risk settings/);
+});
+test("higher-timeframe summary carries its swing levels", () => {
+  const c = Array.from({ length: 220 }, (_, i) => ({ time: 1_700_000_000 + i * 3600, open: 100 + Math.sin(i / 4) * 3, high: 101 + Math.sin(i / 4) * 3, low: 99 + Math.sin(i / 4) * 3, close: 100 + Math.sin(i / 4) * 3 }));
+  const s = summarizeTf("1h", c, 2)!;
+  assert.ok(s.highs.length > 0 && s.lows.length > 0);
+  assert.ok(s.highs.every((h) => h > 100) && s.lows.every((l) => l < 100));
 });
 test("paid prompt teaches regime + track record; free doesn't", () => {
   assert.match(systemPrompt("pro"), /Track record/);

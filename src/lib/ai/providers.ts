@@ -70,13 +70,14 @@ function compatConfig(tier: "free" | "pro"): CompatConfig {
       maxTokens: 2000,
     };
   }
-  // Pro: Qwen 3.8 Max via OpenRouter by default. Any OpenAI-compatible endpoint works
+  // Pro: MiMo v2.6 Pro via OpenRouter by default — best trade outcomes in scripts/eval-trade.ts (BTC 15m
+  // backtests, reasoning off). Any OpenAI-compatible endpoint works
   // (e.g. Alibaba Model Studio: PRO_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1).
   return {
     label: "pro",
     apiKey: process.env.PRO_API_KEY || process.env.OPENROUTER_API_KEY,
     baseURL: process.env.PRO_BASE_URL || OPENROUTER,
-    model: process.env.PRO_MODEL || "qwen/qwen3.8-max-0902",
+    model: process.env.PRO_MODEL || "xiaomi/mimo-v2.6-pro",
     fallbacks: list(process.env.PRO_FALLBACK_MODELS),
     reasoning: process.env.PRO_REASONING,
     // Caps the worst-case cost per request (see PRO_DAILY_LIMIT); ~250-word answers and trade plans fit easily.
@@ -206,7 +207,7 @@ async function streamProOpenCode(args: StreamArgs) {
   });
   try {
     const stream = client.messages.stream(
-      { model: "qwen3.8-max", max_tokens: 2500, thinking: { type: "disabled" }, system: [{ type: "text", text: args.system, cache_control: { type: "ephemeral" } }], messages },
+      { model: "mimo-v2.6-pro", max_tokens: 2500, thinking: { type: "disabled" }, system: [{ type: "text", text: args.system, cache_control: { type: "ephemeral" } }], messages },
       { signal: args.signal },
     );
     for await (const ev of stream) if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") args.onText(ev.delta.text);

@@ -7,6 +7,7 @@ import { getCandles } from "../market/data";
 import { adx, atr, ema, macd, rsi, swings } from "../market/indicators";
 import { type Candle, type Interval, INTERVALS, getInstrument } from "../market/symbols";
 import type { Tier } from "../tiers";
+import type { HtfLevels } from "./guardrails";
 
 /** How many timeframes above the chart's own each paid tier is shown. Paid tiers always get every frame up to 1D. */
 const DEPTH: Record<Tier, number> = { free: 0, pro: 4, ultimate: 4 };
@@ -27,6 +28,9 @@ export interface TfSummary {
   iv: Interval;
   line: string;
   bias: Bias;
+  /** Swing levels of the closed candles (all of them; the line shows the last 3), for Pro's plan guardrails. */
+  highs: number[];
+  lows: number[];
 }
 
 /** One timeframe as a compact text line. Pure. `candles` may end with the still-forming candle. */
@@ -68,7 +72,7 @@ export function summarizeTf(iv: Interval, candles: Candle[], digits: number): Tf
     `swing highs ${sw.highs.slice(-3).map((s) => r(s.price)).join(", ") || "none"}`,
     `swing lows ${sw.lows.slice(-3).map((s) => r(s.price)).join(", ") || "none"}`,
   ];
-  return { iv, line: parts.filter(Boolean).join(" | "), bias };
+  return { iv, line: parts.filter(Boolean).join(" | "), bias, highs: sw.highs.map((s) => s.price), lows: sw.lows.map((s) => s.price) };
 }
 
 /** The <app_context> block: one line per higher timeframe plus how well they agree. Pure. */
@@ -95,9 +99,14 @@ const UNAVAILABLE = "Higher-timeframe view: UNAVAILABLE this turn (data fetch fa
 
 /** Multi-timeframe block for the chat context. Empty on Free or for unknown symbols; an explicit notice when every fetch fails. */
 export async function mtfBlock(symbol: string, chartIv: string, tier: Tier): Promise<string> {
+  return (await mtfView(symbol, chartIv, tier)).block;
+}
+
+/** The block plus each timeframe's swing levels (for the plan guardrails). */
+export async function mtfView(symbol: string, chartIv: string, tier: Tier): Promise<{ block: string; levels: HtfLevels[] }> {
   const inst = getInstrument(symbol);
   const ivs = higherTimeframes(chartIv, tier);
-  if (!inst || !ivs.length) return "";
+  if (!inst || !ivs.length) return { block: "", levels: [] };
   try {
     const results = await Promise.all(
       ivs.map((iv) =>
@@ -107,9 +116,10 @@ export async function mtfBlock(symbol: string, chartIv: string, tier: Tier): Pro
         ]).catch(() => null),
       ),
     );
-    return formatMtf(inst.id, chartIv, results.filter((s): s is TfSummary => s !== null)) || UNAVAILABLE;
+    const sums = results.filter((s): s is TfSummary => s !== null);
+    return { block: formatMtf(inst.id, chartIv, sums) || UNAVAILABLE, levels: sums.map(({ iv, highs, lows }) => ({ iv, highs, lows })) };
   } catch (e) {
     console.warn("[mtf] failed", (e as Error).message);
-    return UNAVAILABLE;
+    return { block: UNAVAILABLE, levels: [] };
   }
 }

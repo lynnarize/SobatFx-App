@@ -11,6 +11,7 @@
     "release": "npm version patch -m \"v%s\"",
     "eval:ai": "tsx --env-file=.env.local scripts/eval-ai.ts",
     "eval:trade": "tsx --env-file=.env.local scripts/eval-trade.ts",
+    "smoke:pro": "tsx --env-file=.env.local scripts/smoke-pro.ts",
     "telegram:webhook": "tsx --env-file=.env.local scripts/telegram-webhook.ts",
     "export:plans": "tsx --env-file=.env.local scripts/export-plans.ts",
     "export:revenue": "tsx --env-file=.env.local scripts/export-revenue.ts"

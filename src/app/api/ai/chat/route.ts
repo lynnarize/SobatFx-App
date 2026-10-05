@@ -7,7 +7,8 @@ import { TIER_INFO } from "@/lib/tiers";
 import { contextBlock, systemPrompt, type ChatContext } from "@/lib/ai/prompt";
 import { ProviderError, streamForTier, type ChatTurn } from "@/lib/ai/providers";
 import { scrub as scrubbed, streamScrubber } from "@/lib/ai/sanitize";
-import { mtfBlock } from "@/lib/ai/mtf";
+import { mtfView } from "@/lib/ai/mtf";
+import { planGuardrails } from "@/lib/ai/guardrails";
 import { recordPlans, trackRecord } from "@/lib/ai/track";
 import { getInstrument, newsKeys } from "@/lib/market/symbols";
 import { asksForDrawing } from "@/lib/drawings";
@@ -155,19 +156,23 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
   }
 
   const inst = ctx?.symbol ? getInstrument(ctx.symbol) : undefined;
-  const [news, track, mtf] = await Promise.all([
+  const [news, track, view] = await Promise.all([
     newsDigest(inst ? newsKeys(inst) : ["USD", "EUR", "XAU", "BTC"], inst).catch(() => "News digest unavailable."),
     // Free gets no trade plans, so it doesn't see past entries/SL/TP either.
     inst && tier !== "free" ? trackRecord(inst.id) : "",
     // Higher-timeframe view (Pro: 2 frames above the chart's, Ultra: 3). Not for an uploaded picture, which may show another pair.
-    inst && tier !== "free" && ctx && imageKind !== "upload" ? mtfBlock(inst.id, ctx.interval, tier) : "",
+    inst && tier !== "free" && ctx && imageKind !== "upload" ? mtfView(inst.id, ctx.interval, tier) : null,
   ]);
+  const mtf = view?.block ?? "";
+  // Pro: the plan's guardrails as numbers, and the app (not the model) sizes the lot — see APP_LOT in prompt.ts.
+  // Neither for an uploaded picture: it may show another pair, and there is no app plan to size.
+  const plan = tier === "pro" && imageKind !== "upload" ? { appLot: true, guardrails: ctx && view ? planGuardrails(ctx, view.levels) : "" } : {};
 
   // Keep the last 8 turns (bounds cost); attach app context + screenshot to the newest user turn only.
   const recent = messages.slice(-8);
   const turns: ChatTurn[] = recent.map((m, i) =>
     i === recent.length - 1
-      ? { role: "user", text: `${contextBlock(ctx, news, imageKind, lang, track, mtf)}\n\n${m.content}`, image }
+      ? { role: "user", text: `${contextBlock(ctx, news, imageKind, lang, track, mtf, plan)}\n\n${m.content}`, image }
       : { role: m.role, text: m.content },
   );
   const system = systemPrompt(tier);

@@ -2,7 +2,7 @@
 // from the streamed output. The system prompt does the real work; this catches slips.
 
 const PATTERN =
-  /\b(claude(?:[\s-]*(?:opus|sonnet|haiku|fable))?(?:[\s-]*\d+(?:[.-]\d+)*)?|anthropic|opus[\s-]*\d+(?:\.\d+)?|sonnet[\s-]*\d+(?:\.\d+)?|haiku[\s-]*\d+(?:\.\d+)?|qwen[\w.-]*|tongyi|openrouter|open[\s-]?code(?:\s*go)?|gemma[\w.-]*|gemini[\w.-]*|nemotron[\w.-]*|chatgpt|gpt[\s-]?\d[\w.-]*|llama[\s-]?\d[\w.-]*|deepseek[\w.-]*|mistral[\w.-]*|glm[\s-]?\d[\w.-]*|kimi[\w.-]*|minimax[\w.-]*|openai|alibaba(?:\s*cloud)?|dashscope|bailian|inclusion[\s-]?ai|ant\s*group|ling[\s-]?\d[\w.-]*|nvidia|grok[\w.-]*|xai)\b/gi;
+  /\b(claude(?:[\s-]*(?:opus|sonnet|haiku|fable))?(?:[\s-]*\d+(?:[.-]\d+)*)?|anthropic|opus[\s-]*\d+(?:\.\d+)?|sonnet[\s-]*\d+(?:\.\d+)?|haiku[\s-]*\d+(?:\.\d+)?|qwen[\w.-]*|tongyi|openrouter|open[\s-]?code(?:\s*go)?|gemma[\w.-]*|gemini[\w.-]*|nemotron[\w.-]*|chatgpt|gpt[\s-]?\d[\w.-]*|llama[\s-]?\d[\w.-]*|deepseek[\w.-]*|mistral[\w.-]*|glm[\s-]?\d[\w.-]*|kimi[\w.-]*|minimax[\w.-]*|openai|alibaba(?:\s*cloud)?|dashscope|bailian|inclusion[\s-]?ai|ant\s*group|ling[\s-]?\d[\w.-]*|nvidia|grok[\w.-]*|xai|xiaomi|mimo[\w.-]*|inkling[\w.-]*|thinking\s*machines)\b/gi;
 
 export function scrub(text: string) {
   return text.replace(PATTERN, "SobatFX AI").replace(/SobatFX AI(\s+SobatFX AI)+/g, "SobatFX AI");

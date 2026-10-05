@@ -34,3 +34,7 @@ yarn-error.log*
 
 # local Claude Code config
 /.claude/
+
+# benchmark outputs (npm run eval:trade -- --suite btc15m) and promo videos
+/scripts/eval-trade-btc15m/
+/video/
