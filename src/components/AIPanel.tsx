@@ -400,6 +400,29 @@ export function AIPanel() {
                 </div>
               ) : m.content ? (
                 <>
+                  {/* The app's corrections come first: the reply below still quotes the AI's own TP/SL/R:R. */}
+                  {(m.rejected?.length || m.planNotes) && (
+                    <div className="mb-2 space-y-1.5">
+                      {m.rejected?.map((p, j) => (
+                        <p key={`r${j}`} className="flex items-start gap-1.5 rounded-lg border border-down/40 bg-panel-2 px-2.5 py-1.5 text-xs font-medium text-down">
+                          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                          {t(p.adjusted ? "ai.rrRejectedAdj" : "ai.rrRejected", { side: t(p.side === "short" ? "pos.short" : "pos.long"), entry: p.entry, rr: p.rr.toFixed(2), min: MIN_RR })}
+                        </p>
+                      ))}
+                      {[...(m.planNotes ?? [])].sort((a, b) => +(b.kind === "rr") - +(a.kind === "rr")).map((n, j) => (
+                        <p key={j} className={`flex items-start gap-1.5 rounded-lg border border-gold-deep/40 bg-panel-2 px-2.5 py-1.5 text-xs text-gold ${n.kind === "rr" ? "font-medium" : ""}`}>
+                          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                          {n.kind === "rr"
+                            ? t("ai.fixRr", { from: n.from.toFixed(2), to: n.to.toFixed(2) })
+                            : n.kind === "tp"
+                              ? t("ai.fixTp", { from: n.from, to: n.to, level: n.level })
+                              : n.kind === "sl"
+                                ? t("ai.fixSl", { from: n.from, to: n.to, atr: n.atr })
+                                : t(n.side === "short" ? "ai.momentumShort" : "ai.momentumLong", { entry: n.entry })}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                   <Markdown text={extractAnnotations(extractDrawings(m.content).text).text} />
                   {extractDrawings(m.content).pending && <p className="mt-1 flex items-center gap-1.5 text-xs text-gold"><PenLine size={12} /> {t("ai.drawing")}</p>}
                   {msgs[i - 1]?.image && extractAnnotations(m.content).pending && <p className="mt-1 flex items-center gap-1.5 text-xs text-gold"><PenLine size={12} /> {t("ai.annotating")}</p>}
@@ -427,22 +450,6 @@ export function AIPanel() {
                       })}
                     </div>
                   )}
-                  {m.rejected?.map((p, j) => (
-                    <p key={j} className="mt-2 flex items-start gap-1.5 rounded-lg border border-down/40 bg-panel-2 px-2.5 py-1.5 text-xs text-down">
-                      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                      {t(p.adjusted ? "ai.rrRejectedAdj" : "ai.rrRejected", { side: t(p.side === "short" ? "pos.short" : "pos.long"), entry: p.entry, rr: p.rr.toFixed(2), min: MIN_RR })}
-                    </p>
-                  ))}
-                  {m.planNotes?.map((n, j) => (
-                    <p key={j} className="mt-2 flex items-start gap-1.5 rounded-lg border border-gold-deep/40 bg-panel-2 px-2.5 py-1.5 text-xs text-gold">
-                      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                      {n.kind === "tp"
-                        ? t("ai.fixTp", { from: n.from, to: n.to, level: n.level })
-                        : n.kind === "sl"
-                          ? t("ai.fixSl", { from: n.from, to: n.to, atr: n.atr })
-                          : t(n.side === "short" ? "ai.momentumShort" : "ai.momentumLong", { entry: n.entry })}
-                    </p>
-                  ))}
                   {m.drawFailed && (
                     <p className="mt-2 rounded-lg border border-line-2 bg-panel-2 px-2.5 py-1.5 text-xs text-muted">
                       <PenLine size={12} className="mr-1 inline" /> {t("ai.drawFailed")}

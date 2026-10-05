@@ -186,13 +186,15 @@ async function streamUltimate(args: StreamArgs) {
 // OpenCode Go is meant for coding agents, so it is never used once the demo is off:
 //  - local:  DEV_PRO_VIA_OPENCODE=true + DEV_SKIP_AUTH=true (not in production builds)
 //  - demo:   DEMO_PRO_VIA_OPENCODE=true + DEMO_MODE=true
+// Either name works, like scripts/eval-trade.ts.
+const openCodeKey = () => process.env.OPENCODE_GO_API_KEY || process.env.OPENCODE_API_KEY;
 const proViaOpenCode = () =>
-  Boolean(process.env.OPENCODE_GO_API_KEY) &&
+  Boolean(openCodeKey()) &&
   ((process.env.NODE_ENV !== "production" && process.env.DEV_SKIP_AUTH === "true" && process.env.DEV_PRO_VIA_OPENCODE === "true") ||
     (process.env.DEMO_MODE === "true" && process.env.DEMO_PRO_VIA_OPENCODE === "true"));
 
 async function streamProOpenCode(args: StreamArgs) {
-  const key = process.env.OPENCODE_GO_API_KEY!;
+  const key = openCodeKey()!;
   const client = new Anthropic({
     apiKey: key,
     baseURL: "https://opencode.ai/zen/go",

@@ -404,7 +404,10 @@ test("plansFromReply keeps only sane positions", () => {
     const p = pos(g.drawings)!;
     assert.ok(p.targetPrice! < 85428 && p.targetPrice! > 85400, `tp ${p.targetPrice}`);
     assert.ok(85220 - p.stopPrice! >= 87, `sl ${p.stopPrice}`);
-    assert.deepEqual(g.notes.map((n) => n.kind), ["tp", "sl", "momentum"]);
+    assert.deepEqual(g.notes.map((n) => n.kind), ["tp", "sl", "rr", "momentum"]);
+    const rr = g.notes.find((n) => n.kind === "rr")!;
+    assert.equal(rr.from, 2.63, "the reply's own R:R: (85430 − 85220) / (85220 − 85140)");
+    assert.equal(rr.to, +((p.targetPrice! - 85220) / (85220 - p.stopPrice!)).toFixed(2), "the R:R of the plan as drawn");
     assert.equal(g.rejected.length, 0);
   });
   test("plan guard: leaves a sound plan alone", () => {

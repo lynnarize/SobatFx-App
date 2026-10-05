@@ -25,6 +25,8 @@ const RECENT_BARS = 30;
 export type PlanNote =
   | { kind: "tp"; side: "long" | "short"; entry: number; from: number; to: number; level: number }
   | { kind: "sl"; side: "long" | "short"; entry: number; from: number; to: number; atr: number }
+  /** R:R of a plan after the TP/SL corrections above, so the user knows the reply's own R:R no longer holds. */
+  | { kind: "rr"; side: "long" | "short"; entry: number; from: number; to: number }
   | { kind: "momentum"; side: "long" | "short"; entry: number };
 
 /**
@@ -90,6 +92,10 @@ export function guardPlans(drawings: Drawing[], candles: Candle[], digits: numbe
       // Notes about a plan that isn't drawn would only confuse.
       for (let i = notes.length - 1; i >= 0; i--) if (notes[i].entry === entry && notes[i].side === side) notes.splice(i, 1);
       continue;
+    }
+    if (tp !== d.targetPrice || sl !== d.stopPrice) {
+      const before = (dir * (d.targetPrice - entry)) / Math.abs(entry - d.stopPrice);
+      notes.push({ kind: "rr", side, entry, from: +before.toFixed(2), to: +rr.toFixed(2) });
     }
 
     // Entering at market into a fading move: lower highs closing under EMA20 (mirrored for shorts).
