@@ -156,7 +156,7 @@ export function AIPanel() {
   }, [symbol, interval, candles, drawings, risk, source, pathname, me, paper, prices, rates]);
 
   const send = useCallback(
-    async (prompt: string, withChart: boolean, upload?: string | null) => {
+    async (prompt: string, withChart: boolean, upload?: string | null, recap?: string) => {
       const text = prompt.trim() || (upload ? t("ai.uploadPrompt") : "");
       if (!text || busy) return;
       const cid = chatId ?? uid();
@@ -185,7 +185,7 @@ export function AIPanel() {
         const res = await fetch("/api/ai/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: history.map(({ role, content }) => ({ role, content })), image, imageSource: upload ? "upload" : "chart", context: buildContext() }),
+          body: JSON.stringify({ messages: history.map(({ role, content }) => ({ role, content })), image, imageSource: upload ? "upload" : "chart", context: buildContext(), recap: recap ? { cur: recap } : undefined }),
           signal: ctl.signal,
         });
         if (!res.ok || !res.body) {
@@ -251,7 +251,7 @@ export function AIPanel() {
   useEffect(() => {
     if (pendingAsk && pendingAsk.n !== lastAsk.current) {
       lastAsk.current = pendingAsk.n;
-      send(pendingAsk.prompt, pendingAsk.withChart);
+      send(pendingAsk.prompt, pendingAsk.withChart, null, pendingAsk.recap);
     }
   }, [pendingAsk, send]);
 

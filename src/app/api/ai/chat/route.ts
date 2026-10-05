@@ -3,7 +3,7 @@ import { z } from "zod";
 import { currentEmail, demoMode, resolveTier } from "@/lib/auth";
 import { AI_IP_PER_MIN, AI_USER_PER_MIN, acquireSlot, consumeGlobalCap, guard, limitUser, readJson, refundGlobalCap } from "@/lib/guard";
 import { serverT } from "@/lib/i18n-server";
-import { TIER_INFO } from "@/lib/tiers";
+import { TIER_INFO, type Tier } from "@/lib/tiers";
 import { contextBlock, systemPrompt, type ChatContext } from "@/lib/ai/prompt";
 import { ProviderError, streamForTier, type ChatTurn } from "@/lib/ai/providers";
 import { scrub as scrubbed, streamScrubber } from "@/lib/ai/sanitize";
@@ -13,7 +13,7 @@ import { recordPlans, trackRecord } from "@/lib/ai/track";
 import { getInstrument, newsKeys } from "@/lib/market/symbols";
 import { asksForDrawing } from "@/lib/drawings";
 import { newsDigest } from "@/lib/news";
-import { consumeDemoCap, consumeUsage, refundDemoCap, refundUsage } from "@/lib/users";
+import { consumeDemoCap, consumeRecap, consumeUsage, getUsage, refundDemoCap, refundRecap, refundUsage } from "@/lib/users";
 
 export const maxDuration = 300;
 
@@ -57,6 +57,8 @@ const Body = z.object({
     .optional(),
   imageSource: z.enum(["chart", "upload"]).optional(),
   context: Context.optional(),
+  /** The News page's "AI news briefing" for one currency ("All" = the default set). Always runs on the Free model. */
+  recap: z.object({ cur: z.string().regex(/^(All|[A-Z]{3})$/) }).optional(),
 });
 
 /** True when the reply's tail is one short chunk repeated over and over (a degenerate loop). */
@@ -121,12 +123,20 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
   if (!raw0.ok) return Response.json({ error: t(raw0.status === 413 ? "srv.tooLarge" : "srv.invalid") }, { status: raw0.status });
   const parsed = Body.safeParse(raw0.data);
   if (!parsed.success) return Response.json({ error: t("srv.invalid") }, { status: 400 });
-  const { messages } = parsed.data;
-  let image = parsed.data.image;
+  const { recap } = parsed.data;
+  // A news recap is always the app's own briefing question, built here, so the flag can't carry other questions.
+  const messages = recap
+    ? [{ role: "user" as const, content: t("news.briefingPrompt", { cur: recap.cur === "All" ? t("news.briefingDefault") : recap.cur }) }]
+    : parsed.data.messages;
+  let image = recap ? undefined : parsed.data.image;
   const ctx: ChatContext | undefined = parsed.data.context;
   if (messages[messages.length - 1].role !== "user") return Response.json({ error: t("srv.invalid") }, { status: 400 });
 
-  const { tier } = await resolveTier(email);
+  const { tier: account } = await resolveTier(email);
+  // The model (and its feature set) this reply runs on. News recaps use the Free model on every tier.
+  const tier: Tier = recap ? "free" : account;
+  // On Pro/Ultra a recap takes from its own allowance, not the tier's daily limit; on Free it counts as usual.
+  const paidRecap = Boolean(recap) && account !== "free";
   // The free model is text-only unless configured otherwise; it still gets candles, indicators and drawings.
   if (tier === "free" && process.env.FREE_MODEL_VISION !== "true") image = undefined;
   // Reading and marking up the user's own uploaded screenshots is a Pro feature.
@@ -145,12 +155,20 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
     if (demoMode()) await refundDemoCap(tier);
     return Response.json({ error: t("srv.globalCap") }, { status: 503 });
   }
-  const usage = await consumeUsage(email, tier);
+  if (paidRecap) {
+    const r = await consumeRecap(email);
+    if (!r.ok) {
+      if (demoMode()) await refundDemoCap(tier);
+      await refundGlobalCap();
+      return Response.json({ error: t("srv.recapLimit", { n: r.limit }), code: "limit" }, { status: 429 });
+    }
+  }
+  const usage = paidRecap ? { ok: true as const, ...(await getUsage(email, account)) } : await consumeUsage(email, account);
   if (!usage.ok) {
     if (demoMode()) await refundDemoCap(tier);
     await refundGlobalCap();
     return Response.json(
-      { error: t(tier !== "free" ? "srv.dailyLimit" : usage.period === "daily" ? "srv.freeLimitToday" : "srv.freeLimit", { n: usage.limit }), code: "limit" },
+      { error: t(account !== "free" ? "srv.dailyLimit" : usage.period === "daily" ? "srv.freeLimitToday" : "srv.freeLimit", { n: usage.limit }), code: "limit" },
       { status: 429 },
     );
   }
@@ -253,7 +271,7 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
         if (!looped && tier !== "free" && onChartPage && imageKind !== "upload") await recordPlans(scrubbed(raw), ctx, tier);
       } catch (e) {
         if (sent === 0) {
-          await refundUsage(email, tier);
+          await (paidRecap ? refundRecap(email) : refundUsage(email, account));
           await refundGlobalCap();
           if (demoMode()) await refundDemoCap(tier);
         }
@@ -277,7 +295,7 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
       "Cache-Control": "no-store",
       "X-Usage-Used": String(usage.used),
       "X-Usage-Limit": String(usage.limit),
-      "X-Tier": tier,
+      "X-Tier": account,
     },
   });
 }

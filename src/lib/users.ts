@@ -165,3 +165,26 @@ export async function refundDemoCap(tier: Tier) {
 export async function refundUsage(email: string, tier: Tier) {
   await kv.decr(usageKey(email, tier));
 }
+
+// ─── News recap on Pro/Ultra ─────────────────────────────────────────────
+// The "AI news briefing" runs on the Free model, so on a paid tier it doesn't take from the tier's daily limit.
+// It has its own daily allowance instead (NEWS_RECAP_DAILY_LIMIT, default 20) so it can't be spammed.
+
+const recapKey = (email: string) => `recap:${email}:${wibDay()}`;
+
+/** Atomically reserves one news recap for a Pro/Ultra user. Call refundRecap() if the model call fails. */
+export async function consumeRecap(email: string) {
+  const key = recapKey(email);
+  const limit = n(process.env.NEWS_RECAP_DAILY_LIMIT, 20);
+  const used = await kv.incr(key);
+  if (used === 1) await kv.expire(key, 2 * 86_400);
+  if (used > limit) {
+    await kv.decr(key);
+    return { ok: false as const, limit };
+  }
+  return { ok: true as const, limit };
+}
+
+export async function refundRecap(email: string) {
+  await kv.decr(recapKey(email));
+}

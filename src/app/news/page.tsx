@@ -10,7 +10,7 @@ const CURRENCIES = ["All", "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD
 
 export default function NewsPage() {
   const { data, error } = useNews();
-  const { askAI } = useWs();
+  const { askAI, me } = useWs();
   const { t, locale } = useT();
   const [cur, setCur] = useState("All");
   const [impact, setImpact] = useState<"High" | "Medium+" | "All">("Medium+");
@@ -44,12 +44,15 @@ export default function NewsPage() {
           <h1 className="text-2xl font-medium">{t("news.title")}</h1>
           <p className="mt-1 text-sm text-muted">{t("news.sub")}</p>
         </div>
-        <button
-          className="btn btn-gold ml-auto"
-          onClick={() => askAI(t("news.briefingPrompt", { cur: cur === "All" ? t("news.briefingDefault") : cur }), { withChart: false })}
-        >
-          <Sparkles size={16} /> {t("news.briefing")}
-        </button>
+        <div className="ml-auto flex flex-col items-end gap-1">
+          <button
+            className="btn btn-gold"
+            onClick={() => askAI(t("news.briefingPrompt", { cur: cur === "All" ? t("news.briefingDefault") : cur }), { withChart: false, recap: cur })}
+          >
+            <Sparkles size={16} /> {t("news.briefing")}
+          </button>
+          {me?.tier && me.tier !== "free" && <span className="text-[11px] text-muted">{t("news.briefingNoLimit")}</span>}
+        </div>
       </div>
 
       <div className="mt-5 flex flex-wrap items-center gap-2">

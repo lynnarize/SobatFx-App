@@ -54,8 +54,9 @@ interface Ws {
   registerChart(h: ChartHandle | null): void;
   aiOpen: boolean;
   setAiOpen(o: boolean): void;
-  askAI(prompt: string, opts?: { withChart?: boolean }): void;
-  pendingAsk: { prompt: string; withChart: boolean; n: number } | null;
+  /** `recap` marks the News page's briefing for that currency: it runs on the Free model (see /api/ai/chat). */
+  askAI(prompt: string, opts?: { withChart?: boolean; recap?: string }): void;
+  pendingAsk: { prompt: string; withChart: boolean; recap?: string; n: number } | null;
   me: Me | null;
   refreshMe(): void;
   /** Demo trading (virtual money), saved in this browser and synced to the Google account. */
@@ -221,9 +222,9 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [setRiskRaw]);
 
-  const askAI = useCallback((prompt: string, opts?: { withChart?: boolean }) => {
+  const askAI = useCallback((prompt: string, opts?: { withChart?: boolean; recap?: string }) => {
     setAiOpen(true);
-    setPendingAsk((p) => ({ prompt, withChart: opts?.withChart ?? true, n: (p?.n ?? 0) + 1 }));
+    setPendingAsk((p) => ({ prompt, withChart: opts?.withChart ?? true, recap: opts?.recap, n: (p?.n ?? 0) + 1 }));
   }, []);
 
   const value: Ws = {
