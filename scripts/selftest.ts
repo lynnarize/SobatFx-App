@@ -891,27 +891,34 @@ void (async () => {
   });
   await atest("one AI slot per user: a second request is refused until the first finishes", async () => {
     const email = `slot-${Date.now()}@test`;
-    const release = await acquireSlot(email);
+    const release = await acquireSlot(email, 0);
     assert.ok(release);
-    assert.equal(await acquireSlot(email), null);
+    assert.equal(await acquireSlot(email, 0), null);
     await release();
     await release(); // releasing twice must not free somebody else's slot
-    const again = await acquireSlot(email);
+    const again = await acquireSlot(email, 0);
     assert.ok(again);
-    assert.equal(await acquireSlot(email), null);
+    assert.equal(await acquireSlot(email, 0), null);
     await again!();
 
+    const holding = (await acquireSlot(email, 0))!;
+    const refusedAt = Date.now();
+    assert.equal(await acquireSlot(email, 300), null, "still busy after the wait: refused");
+    assert.ok(Date.now() - refusedAt >= 250);
+    setTimeout(() => void holding(), 200);
+    assert.ok(await acquireSlot(email, 2000), "a reply that finishes during the wait hands the slot over");
+
     const flaky = `slot-flaky-${Date.now()}@test`;
-    const expire = kv.expire;
-    kv.expire = async () => {
+    const lock = kv.lock;
+    kv.lock = async () => {
       throw new Error("store down");
     };
     try {
-      assert.ok(await acquireSlot(flaky), "a store error fails open");
+      assert.ok(await acquireSlot(flaky, 0), "a store error fails open");
     } finally {
-      kv.expire = expire;
+      kv.lock = lock;
     }
-    assert.ok(await acquireSlot(flaky), "and leaves no count behind to lock the user out");
+    assert.ok(await acquireSlot(flaky, 0), "and leaves nothing behind to lock the user out");
   });
   await atest("Midtrans signature: only the exact SHA-512 passes, odd input never throws, closed without a server key", async () => {
     const env = process.env as Record<string, string | undefined>;

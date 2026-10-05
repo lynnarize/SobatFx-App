@@ -259,6 +259,8 @@ async function answer(req: Request, email: string, lang: ServerT["lang"], t: Ser
         }
         const msg = e instanceof ProviderError ? t(`srv.${e.code}`, { tier: TIER_INFO[tier].label }) : t("srv.unavailable");
         if (!(e instanceof ProviderError)) console.error("[ai] unexpected", e);
+        // Free the slot before the client sees the error, so an immediate resend isn't refused as "still answering".
+        await releaseSlot();
         controller.enqueue(encoder.encode(ERR + msg));
       } finally {
         await releaseSlot();

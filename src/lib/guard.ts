@@ -126,30 +126,31 @@ export const AI_IP_PER_MIN = () => num(process.env.AI_IP_PER_MIN, 20);
 
 const LOCK_TTL = 330; // a little over the route's maxDuration (300s), so a crashed request can't lock a user out for long
 
-/** Takes the user's single AI slot. Returns a release function, or null if a reply is already being generated. */
-export async function acquireSlot(email: string): Promise<(() => Promise<void>) | null> {
-  const key = `ai:busy:${email}`;
-  let counted = false;
+/**
+ * Takes the user's single AI slot, waiting up to `waitMs` for a reply that is just finishing (a resend right after Stop or
+ * an error). Returns a release function, or null if a reply is still being generated.
+ * SET NX EX: the key gets its TTL in the same step, so a killed request frees the slot within LOCK_TTL, and a refused
+ * attempt never extends it.
+ */
+export async function acquireSlot(email: string, waitMs = 3000): Promise<(() => Promise<void>) | null> {
+  const key = `ai:slot:${email}`;
+  const holder = crypto.randomUUID();
+  const until = Date.now() + waitMs;
   try {
-    const n = await kv.incr(key);
-    counted = true;
-    await kv.expire(key, LOCK_TTL);
-    if (n > 1) {
-      counted = false;
-      await kv.decr(key);
-      return null;
+    while (!(await kv.lock(key, LOCK_TTL, holder))) {
+      if (Date.now() >= until) return null;
+      await new Promise((r) => setTimeout(r, 250));
     }
   } catch (e) {
     console.error("[guard] slot store unavailable", (e as Error).message);
-    // Take back an increment whose TTL may not have been set, or the user stays "busy" until the next attempt sets one.
-    if (counted) await kv.decr(key).catch(() => {});
     return async () => {};
   }
   let released = false;
   return async () => {
     if (released) return;
     released = true;
-    await kv.decr(key).catch(() => {});
+    // Only while this request still holds it: after the TTL ran out the slot may belong to a newer request.
+    if ((await kv.get<string>(key).catch(() => null)) === holder) await kv.del(key).catch(() => {});
   };
 }
 
