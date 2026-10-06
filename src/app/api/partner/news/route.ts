@@ -27,10 +27,15 @@ const AI_TIMEOUT_MS = 30_000;
 const RETRY_IF_LEFT_MS = 32_000;
 const WIB_MS = 7 * 3600_000;
 
+/** Why a brief fell back to headlines; the signal builder shows it to the admin. */
+type AiError = "off" | "limit" | "timeout" | "busy" | "unavailable" | "notConfigured" | "notAccepted" | "format";
+
 interface Brief {
   date: string;
   generatedAt: string;
   source: "ai" | "auto";
+  /** Only when source is "auto". */
+  aiError?: AiError;
   assets: AssetBrief[];
   /** Today and tomorrow (WIB). */
   events: ReturnType<typeof upcomingEvents>;
@@ -75,10 +80,14 @@ export async function POST(req: Request) {
 
   let assets: AssetBrief[] = fallbackBrief(heads, now);
   let source: Brief["source"] = "auto";
+  let aiError: AiError | undefined;
 
   const tier = aiTier();
   const daily = tier ? await hit(`partner-day:${gate.key}`, envNum(process.env.PARTNER_DAILY_LIMIT, 200), 86_400) : null;
-  if (tier && daily?.ok && (await consumeGlobalCap())) {
+  if (!tier) aiError = "off";
+  else if (!daily?.ok || !(await consumeGlobalCap())) aiError = "limit";
+  else {
+    let attemptStart = Date.now();
     try {
       const digests = await Promise.all(
         ASSETS.map(async (a) => {
@@ -88,19 +97,30 @@ export async function POST(req: Request) {
       );
       const prompt = `Today in WIB: ${date}. Write the brief for today.\n\n${digests.join("\n\n")}`;
       // Models occasionally answer off-format; one retry is cheaper than a headline-only fallback.
+      attemptStart = Date.now();
       let parsed = parseBrief(scrub(await askAi(tier, prompt)));
-      if (!parsed && Date.now() - now < 60_000 - RETRY_IF_LEFT_MS) parsed = parseBrief(scrub(await askAi(tier, `${prompt}\n\nReply with ONLY the JSON object described in your instructions.`)));
+      if (!parsed && Date.now() - now < 60_000 - RETRY_IF_LEFT_MS) {
+        attemptStart = Date.now();
+        parsed = parseBrief(scrub(await askAi(tier, `${prompt}\n\nReply with ONLY the JSON object described in your instructions.`)));
+      }
       if (parsed) {
         assets = parsed;
         source = "ai";
-      } else console.warn("[partner/news] AI reply had no usable brief");
+      } else {
+        aiError = "format";
+        console.warn("[partner/news] AI reply had no usable brief");
+      }
     } catch (e) {
       await refundGlobalCap();
-      console.error("[partner/news] AI failed", e instanceof ProviderError ? e.code : (e as Error).message);
+      // The SDKs report our own timeout as a generic failure, so tell it apart by how long the attempt ran.
+      const timedOut = Date.now() - attemptStart >= AI_TIMEOUT_MS - 1000;
+      const code = e instanceof ProviderError ? e.code : null;
+      aiError = timedOut ? "timeout" : code === "busyFree" ? "busy" : (code ?? "unavailable");
+      console.error("[partner/news] AI failed:", aiError, `after ${Date.now() - attemptStart} ms`, code ? "" : (e as Error).message);
     }
   }
 
-  const brief: Brief = { date, generatedAt: new Date(now).toISOString(), source, assets, events };
+  const brief: Brief = { date, generatedAt: new Date(now).toISOString(), source, ...(aiError ? { aiError } : {}), assets, events };
   // Only an AI brief is worth keeping: a fallback should be retried on the next tap.
   if (source === "ai") await kv.set(cacheKey, brief, { ex: CACHE_SEC + 60 }).catch(() => {});
   return Response.json(brief, { headers: { "Cache-Control": "no-store" } });
