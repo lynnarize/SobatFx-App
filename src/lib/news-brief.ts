@@ -53,12 +53,44 @@ function clean(v: unknown, max: number) {
   return `${cut.slice(0, cut.lastIndexOf(" ") > max * 0.6 ? cut.lastIndexOf(" ") : cut.length).replace(/[\s,;:.-]+$/, "")}…`;
 }
 
-/** Reads the AI's JSON; null when it is unusable. */
+/**
+ * Closes brackets the model forgot. Some models drop the `]` of the last array before `}`
+ * (`…"BTC."}]}` instead of `…"BTC."]}]}`), which makes an otherwise perfect reply unreadable.
+ * Walks the text outside strings and inserts the missing closers where a different one appears.
+ */
+export function balanceBrackets(text: string) {
+  const pair: Record<string, string> = { "{": "}", "[": "]" };
+  const stack: string[] = [];
+  let out = "";
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      out += c;
+      if (c === "\\") out += text[++i] ?? "";
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{" || c === "[") stack.push(c);
+    else if (c === "}" || c === "]") {
+      // Close whatever is still open inside, until the opener this closer belongs to.
+      while (stack.length && pair[stack.at(-1)!] !== c && stack.includes(c === "}" ? "{" : "[")) out += pair[stack.pop()!];
+      if (stack.length && pair[stack.at(-1)!] === c) stack.pop();
+      else continue; // a stray closer: drop it
+    }
+    out += c;
+  }
+  return out + stack.reverse().map((o) => pair[o]).join("");
+}
+
+/** Reads the AI's JSON (repairing missing brackets); null when it is unusable. */
 export function parseBrief(text: string): AssetBrief[] | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
-  const raw = parseLooseJson(text.slice(start, end + 1)) as { assets?: unknown } | undefined;
+  const body = text.slice(start, end + 1);
+  const raw = (parseLooseJson(body) ?? parseLooseJson(balanceBrackets(body))) as { assets?: unknown } | undefined;
   if (!raw || !Array.isArray(raw.assets)) return null;
   const out: AssetBrief[] = [];
   for (const { symbol } of ASSETS) {

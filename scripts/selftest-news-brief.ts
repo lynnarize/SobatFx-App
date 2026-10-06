@@ -1,6 +1,6 @@
 /** Offline checks for the partner news brief:  npx tsx scripts/selftest-news-brief.ts */
 import assert from "node:assert/strict";
-import { fallbackBrief, parseBrief, upcomingEvents } from "../src/lib/news-brief";
+import { balanceBrackets, fallbackBrief, parseBrief, upcomingEvents } from "../src/lib/news-brief";
 import type { CalendarEvent, Headline } from "../src/lib/news";
 
 let failed = 0;
@@ -25,6 +25,21 @@ test("parseBrief reads both assets, normalises bias and shortens long points at 
   assert.deepEqual(b.map((a) => [a.symbol, a.bias]), [["XAUUSD", "bearish"], ["BTCUSD", "netral"]]);
   const long = b[0].points[1];
   assert.ok(long.length <= 160 && long.endsWith("…") && !long.endsWith(" …"), long);
+});
+
+// A real reply from the Pro model (2026-10-06): the "]" closing the last points array is missing.
+const MISSING_BRACKET = "{\"assets\":[{\"symbol\":\"XAUUSD\",\"bias\":\"bearish\",\"headline\":\"Dollar menguat dan yield global naik, menekan emas di tengah pasar ri\",\"points\":[\"ISM non-manufactur PMI 54.9 vs estimasi 55.2, tapi dolar tetap menguat dan Nasdaq rekor tertinggi.\",\"Yield Treasury AS mendekati 5% dan yield global naik, membatasi daya tarik emas non-imbal hasil.\",\"FOMC Meeting Minutes besok pukul 01.00 WIB berpotensi hawkish dan menekan emas lebih lanjut.\"]},{\"symbol\":\"BTCUSD\",\"bias\":\"bearish\",\"headline\":\"Bitcoin tertahan di $87.000 saat yield Treasury mendekati 5%\",\"points\":[\"Bitcoin terus ditolak di $87.000; yield Treasury 5% mengancam kelanjutan kuartal terbaik sejak 2017.\",\"Regulator longgar: aturan pelaporan $10.000 wallet pribadi dicabut, FinCEN tarik aturan crypto mixing.\",\"FOMC Meeting Minutes besok pukul 01.00 WIB berisiko hawkish dan menahan BTC.\"}]}";
+
+test("parseBrief repairs a missing closing bracket (a real Pro-model reply)", () => {
+  assert.throws(() => JSON.parse(MISSING_BRACKET));
+  const b = parseBrief(MISSING_BRACKET)!;
+  assert.deepEqual(b.map((a) => [a.symbol, a.bias, a.points.length]), [["XAUUSD", "bearish", 3], ["BTCUSD", "bearish", 3]]);
+});
+
+test("balanceBrackets leaves brackets inside strings alone and closes what is left open", () => {
+  assert.equal(balanceBrackets('{"a":["x]}y"}'), '{"a":["x]}y"]}');
+  assert.equal(balanceBrackets('{"a":[1,2'), '{"a":[1,2]}');
+  assert.equal(balanceBrackets('{"a":"q\"}"}'), '{"a":"q\"}"}');
 });
 
 test("parseBrief rejects replies missing an asset or without points", () => {

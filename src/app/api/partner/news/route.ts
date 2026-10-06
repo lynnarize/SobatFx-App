@@ -98,17 +98,20 @@ export async function POST(req: Request) {
       const prompt = `Today in WIB: ${date}. Write the brief for today.\n\n${digests.join("\n\n")}`;
       // Models occasionally answer off-format; one retry is cheaper than a headline-only fallback.
       attemptStart = Date.now();
-      let parsed = parseBrief(scrub(await askAi(tier, prompt)));
+      let reply = scrub(await askAi(tier, prompt));
+      let parsed = parseBrief(reply);
       if (!parsed && Date.now() - now < 60_000 - RETRY_IF_LEFT_MS) {
         attemptStart = Date.now();
-        parsed = parseBrief(scrub(await askAi(tier, `${prompt}\n\nReply with ONLY the JSON object described in your instructions.`)));
+        reply = scrub(await askAi(tier, `${prompt}\n\nReply with ONLY the JSON object described in your instructions.`));
+        parsed = parseBrief(reply);
       }
+      // Enough of the reply to see what went wrong, in the Vercel logs.
+      if (!parsed) console.warn(`[partner/news] unreadable reply (${reply.length} chars): ${JSON.stringify(reply.slice(0, 160))} … ${JSON.stringify(reply.slice(-160))}`);
       if (parsed) {
         assets = parsed;
         source = "ai";
       } else {
         aiError = "format";
-        console.warn("[partner/news] AI reply had no usable brief");
       }
     } catch (e) {
       await refundGlobalCap();
