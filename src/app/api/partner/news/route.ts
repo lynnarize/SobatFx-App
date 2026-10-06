@@ -14,16 +14,17 @@ import type { Tier } from "@/lib/tiers";
 //   Authorization: Bearer <one of PARTNER_API_KEYS>
 //
 // Returns { date, source: "ai" | "auto", assets: [{ symbol, bias, headline, points[] }], events: [...] }.
-// Cached for 15 minutes in Redis, so repeated taps cost one AI call. Uses PARTNER_AI_TIER and
-// PARTNER_DAILY_LIMIT like /api/partner/levels.
+// Cached for 15 minutes in Redis, so repeated taps cost one AI call. Always the Pro model unless
+// PARTNER_NEWS_AI_TIER says otherwise (free|pro|ultimate|off) — independent of PARTNER_AI_TIER, which is
+// for /api/partner/levels. Counts toward PARTNER_DAILY_LIMIT like the levels route.
 
 export const maxDuration = 60;
 
 const CACHE_SEC = 15 * 60;
-/** Per AI attempt; the function as a whole has 60 s (maxDuration). */
-const AI_TIMEOUT_MS = 25_000;
+/** Per AI attempt (Pro is the larger model); the function as a whole has 60 s (maxDuration). */
+const AI_TIMEOUT_MS = 30_000;
 /** A retry only starts while at least this much of the 60 s is left. */
-const RETRY_IF_LEFT_MS = 28_000;
+const RETRY_IF_LEFT_MS = 32_000;
 const WIB_MS = 7 * 3600_000;
 
 interface Brief {
@@ -36,7 +37,7 @@ interface Brief {
 }
 
 function aiTier(): Tier | null {
-  const t = process.env.PARTNER_AI_TIER || "pro";
+  const t = process.env.PARTNER_NEWS_AI_TIER || "pro";
   return t === "free" || t === "pro" || t === "ultimate" ? t : null;
 }
 
