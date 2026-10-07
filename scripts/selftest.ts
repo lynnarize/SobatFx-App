@@ -1,4 +1,5 @@
 /** Offline checks for the pure logic (no API keys needed):  npm test */
+import "./selftest-guard"; // first: refuses to run against a real Redis
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -714,6 +715,10 @@ test("release posts: body lines, other phrasings and the weaker forms match safe
   assert.equal(m5("US September ISM manufacturing 54.5 vs 55.0 expected", "2026-10-05T14:01:00Z"), "ISM Manufacturing PMI", "manufacturing stays manufacturing");
   assert.equal(m5("UK September final services PMI 52.1 vs 51.7 prelim", "2026-10-05T08:31:20Z"), "Final Services PMI");
   assert.equal(parseRelease("UK September services PMI 52.1 vs 51.7 prelim"), null, "'vs prelim' only counts for a final reading");
+  // Seen live: once ISM Services was filled, the same headline went to S&P's US Final Services PMI.
+  const usSvc = [e("2026-10-05T13:45:00.000Z", "USD", "Final Services PMI", "58.7", "58.7")];
+  assert.equal(matchRelease(parseRelease("ISM non- manufacturing PMI 54.9 versus 55.2 estimate")!, "2026-10-05T14:04:17Z", usSvc), undefined, "ISM ≠ S&P Global PMI");
+  assert.equal(matchRelease(parseRelease("US September final services PMI 58.9 vs 58.7 prelim")!, "2026-10-05T13:46:00Z", [...usSvc, oct5[0]])?.title, "Final Services PMI");
   assert.equal(parseRelease("US unemployment rate rises to 4.2%"), null, "the loose form is opt-in (titles only)");
   assert.equal(parseRelease("US unemployment rate rises to 4.2%", { loose: true })?.actual, 4.2);
   assert.equal(parseRelease("Fed's Waller says unemployment rate rises to 4.5% next year", { loose: true }), null);
@@ -941,6 +946,40 @@ void (async () => {
     const r = await hit(k, 3, 60);
     assert.ok(!r.ok && r.retryAfter >= 1 && r.retryAfter <= 60);
     assert.ok((await hit(`${k}:other`, 3, 60)).ok, "another key has its own count");
+  });
+  await atest("BLS: one request per interval across all instances, then everyone reads the saved figure", async () => {
+    const { officialActuals } = await import("../src/lib/news");
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    // Stand-in for BLS: the September jobs report (159015K → 159044K).
+    globalThis.fetch = (async () => {
+      calls++;
+      const data = [{ year: "2026", period: "M09", value: "159044" }, { year: "2026", period: "M08", value: "159015" }];
+      return new Response(JSON.stringify({ status: "REQUEST_SUCCEEDED", Results: { series: [{ seriesID: "CES0000000001", data }] } }));
+    }) as typeof fetch;
+    try {
+      // Released a minute ago (a date whose report covers September), not yet filled.
+      const t = new Date(Date.now() - 60_000);
+      const release = new Date(Date.UTC(2026, 9, 2, t.getUTCHours(), t.getUTCMinutes()));
+      const ev = { id: "x", title: "Non-Farm Employment Change", currency: "USD", time: release.toISOString(), impact: "High" as const, forecast: "90K", previous: "22K", effect: "higher" as const };
+      const realNow = Date.now;
+      Date.now = () => release.getTime() + 60_000;
+      try {
+        // Ten instances refreshing at once: one asks BLS, the others back off.
+        const results = await Promise.all(Array.from({ length: 10 }, () => officialActuals([ev])));
+        assert.equal(calls, 1, "exactly one BLS request");
+        const key = `${ev.time}|USD|Non-Farm Employment Change`;
+        assert.equal(results.filter((r) => r[key]?.v === 29_000).length, 1, "the lock holder has it at once");
+        // Next refresh, still inside the 15-60 s interval: everyone reads the saved figure, no new request.
+        const later = await Promise.all(Array.from({ length: 5 }, () => officialActuals([ev])));
+        assert.equal(calls, 1);
+        assert.ok(later.every((r) => r[key]?.v === 29_000 && r[key].src === "BLS"));
+      } finally {
+        Date.now = realNow;
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
   await atest("one AI slot per user: a second request is refused until the first finishes", async () => {
     const email = `slot-${Date.now()}@test`;

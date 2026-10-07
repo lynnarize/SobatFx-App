@@ -224,7 +224,7 @@ const SYN: [RegExp, string][] = [
 // Words that say nothing about which release it is.
 const STOP = new Set("cb final prelim preliminary flash advance revised second third estimate change index sa nsa the of in a an for to and is at on month monthly quarter quarterly annual annualized headline data report reading level rise rises fall falls m y q us uk eurozone euro area australian australia canada canadian japan japanese german germany french france swiss new zealand nz jan feb mar apr may jun jul aug sep sept oct nov dec january february march april june july august september october november december".split(" "));
 // Qualifiers that must agree on both sides (Core PCE ≠ PCE, ADP ≠ NFP, German CPI ≠ Eurozone CPI).
-const AGREE: RegExp[] = [/\bcore\b/, /\btrimmed\b/, /\bmedian\b/, /\bcommon\b/, /\bservices?\b/, /\bmanufacturing\b/, /\badp\b/, /\bgerman/, /\bfrench\b|\bfrance\b/, /\bital/, /\bspain\b|\bspanish\b/, /\btokyo\b/, /\bprices?\b/, /\bexpectations\b/, /\bprivate\b/, /\bgovernment\b/, /\bcontinuing\b/, /\bunrounded\b/, /\bu6\b|\bunderemployment\b/, /\bparticipation\b/, /\baverage\b/, /\bfour-week\b|\b4-week\b/];
+const AGREE: RegExp[] = [/\bcore\b/, /\btrimmed\b/, /\bmedian\b/, /\bcommon\b/, /\bservices?\b/, /\bmanufacturing\b/, /\badp\b/, /\bgerman/, /\bfrench\b|\bfrance\b/, /\bital/, /\bspain\b|\bspanish\b/, /\btokyo\b/, /\bprices?\b/, /\bexpectations\b/, /\bprivate\b/, /\bgovernment\b/, /\bcontinuing\b/, /\bunrounded\b/, /\bu6\b|\bunderemployment\b/, /\bparticipation\b/, /\baverage\b/, /\bfour-week\b|\b4-week\b/, /\bism\b/];
 
 const norm = (s: string) => {
   let x = ` ${s.toLowerCase()} `;

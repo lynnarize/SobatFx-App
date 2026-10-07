@@ -98,15 +98,18 @@ function display(e: CalendarEvent, v: number) {
  */
 async function headlineActuals(cal: CalendarEvent[], heads: FeedItem[]) {
   const stored = (await kv.get<Record<string, number>>("actuals:rss")) ?? {};
-  const open = cal.filter((e) => !(eventKey(e) in stored) && isNumeric(e) && Date.parse(e.time) <= Date.now());
-  if (!open.length) return stored;
+  // Match against every released event, filled or not: a headline belongs to its single best event.
+  // Leaving filled ones out would hand the same figure to the runner-up on the next refresh (the ISM
+  // Services headline once filled S&P's "Final Services PMI" that way).
+  const released = cal.filter((e) => isNumeric(e) && Date.parse(e.time) <= Date.now());
+  if (released.every((e) => eventKey(e) in stored)) return stored;
   // Strongest evidence first, so a weaker line can't claim an event a headline states outright.
   const rank = (r: Release) => (r.expected != null ? (r.fromBody ? 1 : 0) : r.prior != null ? 2 : 3);
   const found = heads.flatMap((h) => parseReleases(h.title, h.body).map((r) => ({ r, time: h.time })));
   found.sort((a, b) => rank(a.r) - rank(b.r));
   let added = 0;
   for (const { r, time } of found) {
-    const e = matchRelease(r, time, open);
+    const e = matchRelease(r, time, released);
     if (!e || eventKey(e) in stored) continue;
     stored[eventKey(e)] = r.actual;
     added++;
@@ -127,8 +130,10 @@ interface Official {
  * Official actuals for released events BLS covers, kept for the week. BLS is only asked while such
  * an event is released but not yet filled: every 15 s for its first 15 minutes (60 s without an API
  * key, which allows far fewer calls a day), every 5 min for 2 h, then every 30 min for 3 days.
+ * A Redis lock spaces those calls across all server instances: whoever takes it asks BLS and saves
+ * the result, the rest read it, so the daily quota (500 with a key) holds however many instances run.
  */
-async function officialActuals(cal: CalendarEvent[]) {
+export async function officialActuals(cal: CalendarEvent[]) {
   const stored = (await kv.get<Record<string, Official>>("actuals:official")) ?? {};
   const now = Date.now();
   const pending = cal.flatMap((e) => {
@@ -139,20 +144,22 @@ async function officialActuals(cal: CalendarEvent[]) {
     return month ? [{ e, spec, month, age }] : [];
   });
   if (!pending.length) return stored;
+  const youngest = Math.min(...pending.map((p) => p.age));
+  const every = youngest < 15 * 60_000 ? (process.env.BLS_API_KEY ? 15 : 60) : youngest < 2 * 3_600_000 ? 300 : 1800;
+  if (!(await kv.lock("bls:poll", every))) return stored;
   const series = [...new Set(pending.map((p) => p.spec.series))].sort();
   const fromYear = Math.min(...pending.map((p) => +p.month.slice(0, 4))) - 1; // y/y needs last year
-  const youngest = Math.min(...pending.map((p) => p.age));
-  const ttl = () => (youngest < 15 * 60_000 ? (process.env.BLS_API_KEY ? 15 : 60) : youngest < 2 * 3_600_000 ? 300 : 1800);
-  const obs = await cached(`bls:${series.join(",")}:${fromYear}`, ttl, () => fetchBls(series, fromYear));
-  let added = 0;
+  const obs = await fetchBls(series, fromYear);
+  const found: Record<string, Official> = {};
   for (const { e, spec, month } of pending) {
     const v = obs[spec.series] ? actualFrom(spec, obs[spec.series], month) : null;
-    if (v == null) continue;
-    stored[eventKey(e)] = { v, src: "BLS", month, at: new Date().toISOString() };
-    added++;
+    if (v != null) found[eventKey(e)] = { v, src: "BLS", month, at: new Date().toISOString() };
   }
-  if (added) await kv.set("actuals:official", stored, { ex: 8 * 86_400 });
-  return stored;
+  if (!Object.keys(found).length) return stored;
+  // Re-read before writing: an earlier lock holder may have saved since we looked.
+  const merged = { ...((await kv.get<Record<string, Official>>("actuals:official")) ?? {}), ...found };
+  await kv.set("actuals:official", merged, { ex: 8 * 86_400 });
+  return merged;
 }
 
 /** Preview figures ("CPI seen at 4.0%") for upcoming events, kept for the week. */
