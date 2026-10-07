@@ -98,6 +98,12 @@ export function relTime(iso: string, t: T) {
   return s < 3600 ? t("time.agoM", { n: Math.max(1, Math.round(s / 60)) }) : s < 86400 ? t("time.agoH", { n: Math.round(s / 3600) }) : t("time.agoD", { n: Math.round(s / 86400) });
 }
 
+/** Tooltip naming where an actual came from (BLS's terms ask for the retrieval date). */
+function actualTitle(e: CalendarEvent, t: T, locale: string) {
+  if (!e.actual) return undefined;
+  return e.actualSource === "BLS" && e.actualAt ? t("news.actualFromBls", { at: fmtWhen(e.actualAt, locale) }) : t("news.actualFromNews");
+}
+
 const actualColor = (better: CalendarEvent["better"]) => (better === 1 ? "text-up" : better === -1 ? "text-down" : "text-ink");
 
 /** Column labels matching EventRow's layout; render it at the same width as the list so the container breakpoints line up. */
@@ -157,13 +163,13 @@ export function EventRow({ e }: { e: CalendarEvent }) {
             )}
             {/* Narrow containers: figures inline here instead of in columns. */}
             <span className="@lg:hidden">
-              {e.actual && <b className={`font-semibold ${actualColor(e.better)}`}> · A {e.actual}</b>}
+              {e.actual && <b className={`font-semibold ${actualColor(e.better)}`} title={actualTitle(e, t, locale)}> · A {e.actual}</b>}
               {e.forecast && ` · F ${e.forecast}`}
               {e.previous && ` · P ${e.previous}`}
             </span>
           </span>
         </span>
-        <span className={`num hidden w-16 shrink-0 text-right text-xs font-semibold @lg:block ${actualColor(e.better)}`}>{e.actual}</span>
+        <span className={`num hidden w-16 shrink-0 text-right text-xs font-semibold @lg:block ${actualColor(e.better)}`} title={actualTitle(e, t, locale)}>{e.actual}</span>
         <span className="num hidden w-16 shrink-0 text-right text-xs text-ink-2 @lg:block">{e.forecast}</span>
         <span className="num hidden w-16 shrink-0 text-right text-xs text-ink-2 @lg:block">{e.previous}</span>
         <span className="w-3.5 shrink-0">{spec && <ChevronDown size={14} className={`text-muted transition-transform ${open ? "rotate-180" : ""}`} />}</span>

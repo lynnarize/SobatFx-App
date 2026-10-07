@@ -703,9 +703,62 @@ test("release posts: body lines, other phrasings and the weaker forms match safe
   assert.deepEqual(hits("US weekly initial jobless claims", "Four-week moving average 200.0K vs 197K prior", "2026-10-01T12:31:00Z"), {}, "an average isn't the weekly figure");
   assert.deepEqual(hits("investingLive Americas FX news wrap", "Unemployment rate: 4.2% versus 4.1% expected", "2026-10-02T12:40:00Z"), {}, "no country anywhere: could be any currency");
   assert.deepEqual(hits("Preview: September non-farm payrolls by the numbers", "Unemployment rate 4.2% vs 4.1% expected", "2026-10-02T12:31:00Z"), {}, "preview bodies are skipped");
+  // Seen live (5 Oct): ISM still says "non-manufacturing"; final PMIs compared with their flash.
+  const oct5 = [
+    e("2026-10-05T14:00:00.000Z", "USD", "ISM Services PMI", "55.1", "55.4"),
+    e("2026-10-05T14:00:00.000Z", "USD", "ISM Manufacturing PMI", "55.0", "54.5"),
+    e("2026-10-05T08:30:00.000Z", "GBP", "Final Services PMI", "51.7", "54.2"),
+  ];
+  const m5 = (title: string, at: string) => matchRelease(parseRelease(title)!, at, oct5)?.title ?? null;
+  assert.equal(m5("ISM non- manufacturing PMI 54.9 versus 55.2 estimate", "2026-10-05T14:04:17Z"), "ISM Services PMI");
+  assert.equal(m5("US September ISM manufacturing 54.5 vs 55.0 expected", "2026-10-05T14:01:00Z"), "ISM Manufacturing PMI", "manufacturing stays manufacturing");
+  assert.equal(m5("UK September final services PMI 52.1 vs 51.7 prelim", "2026-10-05T08:31:20Z"), "Final Services PMI");
+  assert.equal(parseRelease("UK September services PMI 52.1 vs 51.7 prelim"), null, "'vs prelim' only counts for a final reading");
   assert.equal(parseRelease("US unemployment rate rises to 4.2%"), null, "the loose form is opt-in (titles only)");
   assert.equal(parseRelease("US unemployment rate rises to 4.2%", { loose: true })?.actual, 4.2);
   assert.equal(parseRelease("Fed's Waller says unemployment rate rises to 4.5% next year", { loose: true }), null);
+});
+
+// ── Official actuals (BLS) ──
+import { BLS_EVENTS, actualFrom, blsSpec, refPeriod } from "../src/lib/bls";
+
+test("BLS: release date → data month, and the published figure from the series", () => {
+  const nfp = BLS_EVENTS["Non-Farm Employment Change"];
+  assert.equal(refPeriod("2026-10-02T12:30:00.000Z", nfp), "2026-09", "first-Friday jobs report covers last month");
+  assert.equal(refPeriod("2026-11-06T13:30:00.000Z", nfp), "2026-10");
+  assert.equal(refPeriod("2026-10-14T12:30:00.000Z", BLS_EVENTS["CPI m/m"]), "2026-09");
+  assert.equal(refPeriod("2026-09-29T14:00:00.000Z", BLS_EVENTS["JOLTS Job Openings"]), "2026-08", "JOLTS lags ~5 weeks");
+  assert.equal(refPeriod("2026-10-27T12:30:00.000Z", BLS_EVENTS["CPI m/m"]), null, "a delayed report matches no month: no actual rather than a wrong one");
+  assert.equal(refPeriod("2026-09-16T12:30:00.000Z", BLS_EVENTS["Import Prices m/m"]), "2026-08");
+  // Quarterly: ECI end of the following month, preliminary productivity ~5 weeks after the quarter.
+  assert.equal(refPeriod("2026-10-30T12:30:00.000Z", BLS_EVENTS["Employment Cost Index q/q"]), "2026-Q3");
+  assert.equal(refPeriod("2026-11-05T13:30:00.000Z", BLS_EVENTS["Prelim Nonfarm Productivity q/q"]), "2026-Q3");
+  assert.equal(refPeriod("2026-08-06T12:30:00.000Z", BLS_EVENTS["Prelim Unit Labor Costs q/q"]), "2026-Q2");
+  assert.equal(blsSpec("USD", "Revised Nonfarm Productivity q/q"), undefined, "revisions: the old figure is already in BLS");
+  assert.equal(blsSpec("CAD", "Unemployment Rate"), undefined, "US only");
+
+  // Real BLS values for the 2 Oct 2026 jobs report (published: +29K, 4.2%, +0.1% m/m, 3.0% y/y).
+  const ces = { obs: { "2026-08": 159015, "2026-09": 159044 }, decimals: 0 };
+  const ahe = { obs: { "2025-09": 36.7, "2026-08": 37.76, "2026-09": 37.81 }, decimals: 2 };
+  assert.equal(actualFrom(nfp, ces, "2026-09"), 29_000);
+  assert.equal(actualFrom(BLS_EVENTS["Unemployment Rate"], { obs: { "2026-09": 4.2 }, decimals: 1 }, "2026-09"), 4.2);
+  // Hourly earnings: BLS doesn't say whether its % change uses the rounded dollars, and 37.81/37.76 could
+  // be 0.1 or 0.2 → skipped (the NFP post's body line fills it). An unambiguous month goes through.
+  assert.equal(actualFrom(BLS_EVENTS["Average Hourly Earnings m/m"], ahe, "2026-09"), null);
+  assert.equal(actualFrom(BLS_EVENTS["Average Hourly Earnings y/y"], ahe, "2026-09"), null);
+  assert.equal(actualFrom(BLS_EVENTS["Average Hourly Earnings m/m"], { obs: { "2026-07": 37.5, "2026-08": 37.62 }, decimals: 2 }, "2026-08"), 0.3);
+  assert.equal(actualFrom(BLS_EVENTS["JOLTS Job Openings"], { obs: { "2026-08": 7079 }, decimals: 0 }, "2026-08"), 7_079_000);
+  // Import prices: BLS derives % changes from the rounded indexes, so the published figures come out
+  // exactly (Table A, 16 Sep 2026: May +1.8, Jun -0.3, Jul -0.3, Aug +0.7).
+  const imp = { obs: { "2026-04": 148.1, "2026-05": 150.7, "2026-06": 150.3, "2026-07": 149.8, "2026-08": 150.8 }, decimals: 1 };
+  const ip = BLS_EVENTS["Import Prices m/m"];
+  assert.deepEqual(["2026-05", "2026-06", "2026-07", "2026-08"].map((m) => actualFrom(ip, imp, m)), [1.8, -0.3, -0.3, 0.7]);
+  // Elsewhere a change the indexes' rounding could flip is skipped (headlines fill it instead).
+  assert.equal(actualFrom({ ...ip, exact: false }, imp, "2026-08"), null, "150.8/149.8 could be 0.6 or 0.7");
+  assert.equal(actualFrom(BLS_EVENTS["Prelim Nonfarm Productivity q/q"], { obs: { "2026-Q2": 1.4 }, decimals: 1 }, "2026-Q2"), 1.4);
+  // Before the release BLS doesn't have the period yet: nothing to fill.
+  assert.equal(actualFrom(nfp, { obs: { "2026-08": 159015 }, decimals: 0 }, "2026-09"), null);
+  assert.equal(actualFrom(nfp, { obs: { "2026-09": 159044 }, decimals: 0 }, "2026-09"), null, "needs the prior month for a change");
 });
 
 // ── Calendar event detail ──

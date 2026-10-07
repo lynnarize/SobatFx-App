@@ -103,6 +103,7 @@ export default function NewsPage() {
             </>
           )}
           <p className="mt-2 text-[11px] text-muted">{t("news.calSource")}</p>
+          <p className="mt-1 text-[11px] text-muted">{t("news.blsNote")}</p>
         </section>
 
         <section className="card min-w-0 p-5">

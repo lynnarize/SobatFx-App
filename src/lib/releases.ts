@@ -61,6 +61,8 @@ const EXPECTED = [
   new RegExp(String.raw`\(\s*${KW}\s*:?\s*${NUM}`, "i"), // "(expected 50.1"
   new RegExp(String.raw`\b(?:beats?|beating|misses?|missing|tops?|topping|exceeds?|exceeding|above|below|against)\s*(?:the\s*)?${NUM}${PERIOD}\s*${KW}`, "i"), // "beats 3.6% estimates"
   new RegExp(String.raw`(?<=\d(?:%|[kmbt]|million|mln|billion|bn|thousand)?\s*,?\s*)\b${KW}\s*:?\s*${NUM}`, "i"), // "2.7% expected 2.5%"
+  // A final reading vs its flash: FF's forecast for a final PMI/CPI is the flash figure.
+  new RegExp(String.raw`(?<=\bfinal\b.*)\b(?:vs\.?|versus)\s*${NUM}${PERIOD}\s*(?:prelim(?:inary)?|flash)\b`, "i"), // "final services PMI 52.1 vs 51.7 prelim"
 ];
 const PRIOR = new RegExp(String.raw`\b(?:prior|previous|prev\.?)\s*(?:was\s*|:\s*)?${NUM}`, "i");
 // "51.5 vs 53.0 prior": no consensus, so the prior has to prove which event it is.
@@ -212,6 +214,7 @@ const SYN: [RegExp, string][] = [
   [/\bproducer price index\b|\bppi\b/g, " ppi "],
   [/\bgross domestic product\b|\bgdp\b/g, " gdp "],
   [/\bpurchasing managers'? index\b|\bpmi\b/g, " pmi "],
+  [/\bnon-?\s?manufacturing\b/g, " services "], // ISM's old name for its services survey
   [/\bpce price index\b|\bpce\b/g, " pce "],
   [/\bumich\b|\buniversity of michigan\b|\buom\b/g, " uom "],
   [/\bconsumer confidence\b/g, " confidence "],

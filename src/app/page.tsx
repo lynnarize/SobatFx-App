@@ -275,6 +275,7 @@ function MarketOverview() {
           <Link href="/news" className="mt-2 inline-block text-xs text-gold hover:underline">
             {t("ov.fullCalendar")}
           </Link>
+          <p className="mt-1 text-[10px] text-muted">{t("news.blsNote")}</p>
         </div>
         <div className="card min-w-0 p-5">
           <div className="mb-2 flex flex-wrap items-center gap-2">

@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import { actualFrom, blsSpec, fetchBls, refPeriod } from "./bls";
 import { cached } from "./cache";
 import { kv } from "./store";
 import { loadHistories, loadPreviews, measureReaction, saveHistory, savePreviews } from "./event-history";
@@ -13,6 +14,7 @@ import { type UsualEffect, pairDirection, parseValue, surprise, usualEffect } fr
 // headlines in the RSS feeds (src/lib/releases.ts).
 // Headlines: public RSS feeds, tagged with the currencies/assets they likely move.
 // Around a Medium/High release (src/lib/release-window.ts) every layer refreshes faster.
+// Official actuals (src/lib/bls.ts) outrank headline ones for the events they cover.
 
 export type Impact = "High" | "Medium" | "Low" | "Holiday";
 
@@ -26,6 +28,10 @@ export interface CalendarEvent {
   previous: string;
   /** Released value, with FF's unit ("4.1%", "120K"), when a release headline gave it. */
   actual?: string;
+  /** Where `actual` came from: the official statistics agency, or a release headline. */
+  actualSource?: "BLS" | "news";
+  /** When an official actual was retrieved (ISO); BLS's terms ask apps to show it. */
+  actualAt?: string;
   /** +1 better for the currency than forecast, −1 worse, 0 in line (FF's green/red number). */
   better?: -1 | 0 | 1 | null;
   /** FF's "Usual Effect" for this kind of event (src/lib/usual-effect.ts). */
@@ -109,6 +115,46 @@ async function headlineActuals(cal: CalendarEvent[], heads: FeedItem[]) {
   return stored;
 }
 
+interface Official {
+  v: number;
+  src: "BLS";
+  /** Data period, e.g. "2026-09" or "2026-Q3". */
+  month: string;
+  at: string;
+}
+
+/**
+ * Official actuals for released events BLS covers, kept for the week. BLS is only asked while such
+ * an event is released but not yet filled: every 15 s for its first 15 minutes (60 s without an API
+ * key, which allows far fewer calls a day), every 5 min for 2 h, then every 30 min for 3 days.
+ */
+async function officialActuals(cal: CalendarEvent[]) {
+  const stored = (await kv.get<Record<string, Official>>("actuals:official")) ?? {};
+  const now = Date.now();
+  const pending = cal.flatMap((e) => {
+    const spec = blsSpec(e.currency, e.title);
+    const age = now - Date.parse(e.time);
+    if (!spec || eventKey(e) in stored || age < 0 || age > 3 * 86_400_000) return [];
+    const month = refPeriod(e.time, spec);
+    return month ? [{ e, spec, month, age }] : [];
+  });
+  if (!pending.length) return stored;
+  const series = [...new Set(pending.map((p) => p.spec.series))].sort();
+  const fromYear = Math.min(...pending.map((p) => +p.month.slice(0, 4))) - 1; // y/y needs last year
+  const youngest = Math.min(...pending.map((p) => p.age));
+  const ttl = () => (youngest < 15 * 60_000 ? (process.env.BLS_API_KEY ? 15 : 60) : youngest < 2 * 3_600_000 ? 300 : 1800);
+  const obs = await cached(`bls:${series.join(",")}:${fromYear}`, ttl, () => fetchBls(series, fromYear));
+  let added = 0;
+  for (const { e, spec, month } of pending) {
+    const v = obs[spec.series] ? actualFrom(spec, obs[spec.series], month) : null;
+    if (v == null) continue;
+    stored[eventKey(e)] = { v, src: "BLS", month, at: new Date().toISOString() };
+    added++;
+  }
+  if (added) await kv.set("actuals:official", stored, { ex: 8 * 86_400 });
+  return stored;
+}
+
 /** Preview figures ("CPI seen at 4.0%") for upcoming events, kept for the week. */
 async function headlinePreviews(cal: CalendarEvent[], heads: Headline[]) {
   const stored = await loadPreviews();
@@ -189,13 +235,22 @@ export function getCalendar() {
     const ff = await ffCalendar();
     const heads = await feedItems().catch(() => [] as FeedItem[]);
     const warn = (what: string) => (e: unknown) => (console.warn(`[news] ${what}`, (e as Error).message), {});
-    const [fromHeads, previews] = await Promise.all([
+    const [official, fromHeads, previews] = await Promise.all([
+      officialActuals(ff).catch(warn("official actuals")) as Promise<Record<string, Official>>,
       headlineActuals(ff, heads).catch(warn("headline actuals")) as Promise<Record<string, number>>,
       headlinePreviews(ff, heads).catch(warn("previews")) as Promise<Record<string, { v: number; text: string }>>,
     ]);
     const cal = ff.map((e): CalendarEvent => {
-      const v = fromHeads[eventKey(e)];
-      return v == null ? e : { ...e, actual: display(e, v), better: surprise(e.title, v, parseValue(e.forecast) ?? undefined, parseValue(e.previous) ?? undefined) };
+      const off = official[eventKey(e)];
+      const v = off?.v ?? fromHeads[eventKey(e)];
+      if (v == null) return e;
+      return {
+        ...e,
+        actual: display(e, v),
+        actualSource: off ? off.src : "news",
+        ...(off && { actualAt: off.at }),
+        better: surprise(e.title, v, parseValue(e.forecast) ?? undefined, parseValue(e.previous) ?? undefined),
+      };
     });
     lastCal = await withOutlook(cal, previews).catch((e) => (console.warn("[news] outlook", (e as Error).message), cal));
     return lastCal;
