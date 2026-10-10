@@ -157,8 +157,8 @@ export function validateLevels(side: Side, price: number, sl?: number, tp?: numb
   return null;
 }
 
-export function stats(acc: PaperAccount) {
-  const closed = acc.trades.filter((t) => t.closedAt != null);
+export function stats(acc: PaperAccount, symbol?: string) {
+  const closed = acc.trades.filter((t) => t.closedAt != null && (!symbol || t.symbol === symbol));
   const wins = closed.filter((t) => (t.pnl ?? 0) > 0);
   const losses = closed.filter((t) => (t.pnl ?? 0) < 0);
   const gross = (xs: PaperTrade[]) => xs.reduce((s, t) => s + (t.pnl ?? 0), 0);
@@ -166,8 +166,8 @@ export function stats(acc: PaperAccount) {
   const rs = closed.map(rMultiple).filter((r): r is number => r != null);
   return {
     closed: closed.length,
-    open: acc.trades.filter((t) => t.closedAt == null && !t.pending).length,
-    pending: acc.trades.filter((t) => t.pending).length,
+    open: acc.trades.filter((t) => t.closedAt == null && !t.pending && (!symbol || t.symbol === symbol)).length,
+    pending: acc.trades.filter((t) => t.pending && (!symbol || t.symbol === symbol)).length,
     winRate: closed.length ? wins.length / closed.length : null,
     realised,
     balance: acc.startBalance + realised,

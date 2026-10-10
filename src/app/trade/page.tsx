@@ -25,6 +25,11 @@ export default function TradeJournalPage() {
     [t("trade.pf"), s.profitFactor == null ? "—" : Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞"],
   ];
 
+  const perInstrument = [
+    { id: "XAUUSD", label: "XAU/USD" },
+    { id: "BTCUSD", label: "BTC/USD" },
+  ].map((i) => ({ ...i, s: stats(paper, i.id) }));
+
   return (
     <div className="mx-auto max-w-[1400px] px-4 pb-24 pt-6 @2xl:px-8">
       <div className="flex flex-wrap items-end gap-4">
@@ -48,6 +53,20 @@ export default function TradeJournalPage() {
           <div key={k} className="card px-4 py-3">
             <div className="text-[11px] text-muted">{k}</div>
             <div className={`num mt-1 text-lg ${cls ?? ""}`}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))]">
+        {perInstrument.map(({ id, label, s: is }) => (
+          <div key={id} className="card px-4 py-3">
+            <div className="text-[11px] text-muted">
+              {label} · {t("trade.winRate")}
+            </div>
+            <div className="num mt-1 text-lg">{is.winRate == null ? "—" : `${(is.winRate * 100).toFixed(0)}%`}</div>
+            <div className="num mt-0.5 text-[11px] text-muted">
+              {t("trade.tpSl")}: {is.tpHits} / {is.slHits} · {is.closed} {t("trade.closedShort")}
+            </div>
           </div>
         ))}
       </div>
